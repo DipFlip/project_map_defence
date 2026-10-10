@@ -3,7 +3,7 @@
     .venv/bin/python tools/record_buttons.py [seconds]
 
 Protocol: with tag A (id 10) lying on the table, bring a wand close to it
-(within the projected 5 cm ring), cover its red spot, move away, uncover.
+(within the projected 5 cm ring), cover its blue spot, move away, uncover.
 Do that 5 times per wand. The "pressed" label comes from the distance to tag A,
 not from the button detector, so the detector can be evaluated against it
 (tools/analyze_buttons.py).

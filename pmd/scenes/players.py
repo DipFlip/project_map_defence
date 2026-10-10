@@ -3,7 +3,7 @@ import numpy as np
 
 # wand pairs: tags G+B and D+C
 PAIRS = ((16, 11), (13, 12))
-COLORS = ((80, 160, 255), (255, 150, 50))
+COLORS = ((70, 220, 120), (255, 150, 50))  # no blue: blue is the wand buttons' colour
 
 
 class Player:

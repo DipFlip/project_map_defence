@@ -2,7 +2,7 @@
 
     .venv/bin/python tools/button_test.py [seconds]
 
-Cover and uncover each wand's red spot a few times, also while moving and tilting. At the end it prints the
+Cover and uncover each wand's blue spot a few times, also while moving and tilting. At the end it prints the
 value distribution per wand, to pick PRESS_BELOW / RELEASE_ABOVE in pmd/tracker.py.
 """
 import os
@@ -50,7 +50,7 @@ def main(seconds):
                 ui.quiet_wand(s, t)
                 label = "--" if t.button is None else f"{t.button:.2f}"
                 ui.text(s, font, f"{k}: {label}", t.pos + t.forward * t.size * 2.4, color)
-            ui.text(s, font, f"cover the red spots - {t_end - time.monotonic():.0f}s",
+            ui.text(s, font, f"cover the blue spots - {t_end - time.monotonic():.0f}s",
                     center, (200, 200, 200))
             proj.flip()
             proj.clock.tick(60)

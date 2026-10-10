@@ -1,4 +1,4 @@
-"""Game select: hold a wand over a game and cover its red spot to start it."""
+"""Game select: hold a wand over a game and cover its blue spot to start it."""
 import math
 
 import numpy as np
@@ -24,9 +24,14 @@ class Menu:
         self.font = pygame.font.SysFont(None, int(f.height * 0.09))
         self.small = pygame.font.SysFont(None, int(f.height * 0.05))
         self.facing = app.facing
+        self.clicks = []  # (wand position, button position, time, colour): feedback for every press
         self.up = np.array([0.0, 1.0]) if self.facing == "top" else np.array([0.0, -1.0])
 
     def update(self, dt, now, tags, presses):
+        for k in presses:
+            pair = next(i for i, p in enumerate(PAIRS) if k in p)
+            self.clicks.append((tags[k].pos.copy(), tags[k].button_pos(), now, COLORS[pair]))
+        self.clicks = [c for c in self.clicks if now - c[2] < 0.6]
         for k in presses:
             for name, tile in zip(self.choices, self.tiles):
                 if tile.collidepoint(tags[k].pos):
@@ -38,7 +43,7 @@ class Menu:
         f = self.field
         tags = self.app.tags
         wands = [tags[k] for k in WAND_IDS if k in tags]
-        ui.text(s, self.small, "hold a wand over a game and cover its red spot", f.center + self.up * f.height * 0.4,
+        ui.text(s, self.small, "hold a wand over a game and cover its blue spot", f.center + self.up * f.height * 0.4,
                 (170, 170, 170), self.facing)
         for name, tile in zip(self.choices, self.tiles):
             hover = any(tile.collidepoint(w.pos) for w in wands)
@@ -51,6 +56,14 @@ class Menu:
             pair = next(i for i, p in enumerate(PAIRS) if w.id in p)
             pygame.draw.circle(s, COLORS[pair], w.pos, w.size * 1.3, 4)
             ui.quiet_wand(s, w)
+        for pos, button, t0, color in self.clicks:  # click burst around the wand that pressed
+            age = (now - t0) / 0.6
+            r = self.app.px_per_mm * (14 + 40 * age)
+            pygame.draw.circle(s, color, pos, r, max(1, int(6 * (1 - age))))
+            for i in range(8):
+                a = i * math.pi / 4
+                d = np.array([math.cos(a), math.sin(a)])
+                pygame.draw.line(s, (255, 255, 255), pos + d * r, pos + d * (r + 8 * self.app.px_per_mm * (1 - age)), 3)
 
     def _icon(self, s, name, tile, now):
         c = np.array(tile.center, float)

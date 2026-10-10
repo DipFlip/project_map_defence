@@ -1,8 +1,8 @@
-"""Measure where each wand's red button spot is relative to its tag.
+"""Measure where each wand's button spot is relative to its tag.
 
     .venv/bin/python tools/measure_wands.py
 
-Lay the wands flat on the table with their red spots uncovered. Writes
+Lay the wands flat on the table with their spots uncovered. Writes
 data/wands.json: per wand, the spot centre in tag heights printed-down and
 towards printed-left, used by the tracker and for drawing.
 """
@@ -19,12 +19,13 @@ import numpy as np  # noqa: E402
 from pmd import CALIB_PATH  # noqa: E402
 from pmd.calibration import Calibration  # noqa: E402
 from pmd.camera import Camera  # noqa: E402
+from pmd.projector import Projector  # noqa: E402
 from pmd.tags import TagDetector  # noqa: E402
-from pmd.tracker import BUTTON_OFFSET, GREEN_PER_RED, MIN_LIGHT, RED_SHARE, WAND_IDS, WANDS_PATH  # noqa: E402
+from pmd.tracker import BUTTON_OFFSET, WAND_IDS, WANDS_PATH, spot_mask  # noqa: E402
 
 
 def spot_centre(color, c):
-    """Centre of the red pixels near the expected spot, in (down, left) tag heights, or None."""
+    """Centre of the spot pixels near the expected spot, in (down, left) tag heights, or None."""
     center = c.mean(axis=0)
     down, left = c[0] - c[3], c[1] - c[0]
     side = float(np.linalg.norm(down))
@@ -34,9 +35,8 @@ def spot_centre(color, c):
     if x - r < 0 or y - r < 0 or x + r >= w or y + r >= h:
         return None
     box = color[y - r:y + r, x - r:x + r].astype(np.float32)
-    b, g, rr = np.moveaxis(box / np.percentile(box.reshape(-1, 3), 95, axis=0), -1, 0)
-    total = rr + g + b
-    ys, xs = np.nonzero((rr > RED_SHARE * total) & (g < GREEN_PER_RED * rr) & (total > MIN_LIGHT))
+    b, g, rr = np.moveaxis(box / 255.0, -1, 0)
+    ys, xs = np.nonzero(spot_mask(b, g, rr))
     if len(xs) < 10:
         return None
     pts = np.stack([xs + x - r, ys + y - r], 1) - center
@@ -45,6 +45,8 @@ def spot_centre(color, c):
 
 def main():
     calib = Calibration.load(CALIB_PATH)
+    proj = Projector()
+    proj.fill((0, 0, 0))  # otherwise the text console is projected onto the wands
     cam = Camera()
     cam.manual_exposure(calib.exposure)
     time.sleep(1.5)
@@ -60,6 +62,7 @@ def main():
                     found[t.id].append(s)
     cam.auto_exposure()
     cam.close()
+    proj.close()
     spots = {}
     for k, v in found.items():
         if len(v) < 5:

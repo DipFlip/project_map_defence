@@ -1,7 +1,7 @@
 """Pin shooter: knock down the opponent's line of 10 pins with bowling balls.
 
 Players stand at the short ends. Each wand holds one ball; cover the wand's
-red spot to fire it straight ahead (the tag's printed top). Wands block
+blue spot to fire it straight ahead (the tag's printed top). Wands block
 balls coming at you: an empty wand catches the ball (now it's yours), a
 loaded one deflects it. Balls that get past your pin line roll into your
 ball return (on the wall to your right, halfway to the centre); hold an empty
@@ -165,7 +165,7 @@ class PinShooter:
             for pos, down in self.pins[i]:
                 if down is None:
                     pygame.draw.circle(s, (250, 250, 250), pos, self.pin_r)
-                    pygame.draw.circle(s, (40, 90, 220), pos, self.pin_r * 0.6, 3)  # not red: red is the wand buttons
+                    pygame.draw.circle(s, (230, 150, 30), pos, self.pin_r * 0.6, 3)  # not blue: blue is the wand buttons
                 else:
                     fade = max(0.25, 1 - (now - down) / 0.6)
                     off = np.array([p.dir * self.pin_r * 1.5, 0]) * min(1, (now - down) / 0.3)

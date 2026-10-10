@@ -27,10 +27,10 @@ from . import DATA_DIR
 from .filters import OneEuro
 from .tags import TagDetector
 
-# handheld wands: a red spot about BUTTON_OFFSET tag heights below the tag (printed
+# handheld wands: a blue spot about BUTTON_OFFSET tag heights below the tag (printed
 # down, from the tag centre) is their button; each wand's exact spot position is
 # measured by tools/measure_wands.py into data/wands.json.
-# Covering it is a press. The button value is the red area found around the
+# Covering it is a press. The button value is the spot's area found around the
 # expected spot position, in tag areas: ~0.6 visible, ~0 covered.
 WAND_IDS = (16, 11, 13, 12)
 BUTTON_OFFSET = 2.9
@@ -51,13 +51,21 @@ def load_button_spots():
 
 
 BUTTON_SPOTS = load_button_spots()
-BUTTON_SEARCH = 1.6  # +- tag heights searched around the expected spot (nothing else red is near)
-# a pixel is "red" when red's share of r+g+b exceeds RED_SHARE and green <
-# GREEN_PER_RED * red (raw camera colours). Shares don't change when a hand shades
-# the spot. Measured shares: spots ~0.59 (the darker one too), brown stick ~0.39,
-# white table ~0.33, skin ~0.41. Checked on a recorded, labelled dataset
-# (tools/record_buttons.py, tools/analyze_buttons.py).
-RED_SHARE, GREEN_PER_RED = 0.5, 0.5
+BUTTON_SEARCH = 1.6  # +- tag heights searched around the expected spot (nothing else that colour is near)
+# a pixel belongs to the (blue) spot when blue > BLUE_PER_RED * red and
+# blue > BLUE_PER_GREEN * green (raw camera colours; ratios don't change when a
+# hand shades the spot). Measured: spots blue/red ~2.2, blue/green ~2.1; brown
+# stick 0.65 / 0.87; white table <= 1.02 / 1.05; skin ~0.63 / ~1.05. (Red spots
+# were too close to skin in dim light: tools/record_buttons.py + analyze_buttons.py.)
+BLUE_PER_RED, BLUE_PER_GREEN = 1.4, 1.3
+SPOT_MAX_AREA = 1.5  # tag areas: a visible spot is ~0.3-0.5; anything much bigger isn't a spot
+
+
+def spot_mask(b, g, r):
+    """Pixels of a wand's button spot, from float channels scaled 0..1."""
+    return (b > BLUE_PER_RED * r) & (b > BLUE_PER_GREEN * g) & (r + g + b > MIN_LIGHT)
+
+
 MIN_LIGHT = 0.15  # ignore pixels darker than this (r+g+b, white = 3): colour is noise there
 BUTTON_MIN_LEVEL = 0.15  # visible level never learned below this (a wand that starts covered)
 STILL_PX = 1.0  # position wobble (projector px, ~0.6 mm) below which a wand counts as lying still
@@ -81,7 +89,7 @@ class TrackedTag:
     vel: np.ndarray = None  # projector px / s (filtered)
     cam_vel: np.ndarray = None  # camera px / s
     raw_pos: np.ndarray = None  # unfiltered projector px of the last detection
-    button: float = None  # red button area in tag areas, ~0.6 visible, ~0 covered (wands only)
+    button: float = None  # button spot area in tag areas, ~0.6 visible, ~0 covered (wands only)
     pressed: bool = False  # button patch covered (debounced)
 
     @property
@@ -192,7 +200,7 @@ def _child_main(conn, calib_path, exposure, core_args):
     cv2.setNumThreads(4)  # the little cores on this SoC slow OpenCV's pool down; 4 is fastest
     try:
         calib = Calibration.load(calib_path)
-        cam = Camera()  # colour: the wand buttons are red
+        cam = Camera()  # colour: the wand buttons are coloured spots
         cam.manual_exposure(exposure or calib.exposure)
     except Exception as e:  # report instead of leaving the parent waiting
         conn.send(("error", repr(e)))
@@ -394,11 +402,11 @@ class _Core:
 
     @staticmethod
     def _sample_button(color, c, spot=(BUTTON_OFFSET, 0.0)):
-        """Area of the red spot near where it should be, in tag areas (~0.5 visible, ~0 covered).
+        """Area of the button spot near where it should be, in tag areas (~0.5 visible, ~0 covered).
 
         The box is generous (BUTTON_SEARCH tag heights each way) because nothing
-        else near a wand is red: tilt, angle or position errors don't matter.
-        Only the red blob closest to the expected position counts, so another wand's spot in
+        else near a wand has the spot's colour: tilt, angle or position errors don't matter.
+        Only the spot-coloured blob closest to the expected position counts, so another wand's spot in
         the box can't hide a press: it must sit on this wand's own stick axis.
         """
         h, w = color.shape[:2]
@@ -414,16 +422,15 @@ class _Core:
         # raw camera colours: white-balancing against the box failed when a hand
         # filled it (skin became "white"), and the raw shares separate fine
         b, g, rr = np.moveaxis(color[y0:y1, x0:x1].astype(np.float32) / 255.0, -1, 0)
-        total = rr + g + b
-        red = ((rr > RED_SHARE * total) & (g < GREEN_PER_RED * rr) & (total > MIN_LIGHT)).astype(np.uint8)
-        n, _, stats, centroids = cv2.connectedComponentsWithStats(red)
+        n, _, stats, centroids = cv2.connectedComponentsWithStats(spot_mask(b, g, rr).astype(np.uint8))
         if n < 2:
             return 0.0
         areas = stats[1:, cv2.CC_STAT_AREA]
         # blob centres relative to the expected spot, in tag heights along / across this wand
         rel = centroids[1:] + (x0, y0) - (x, y)
         along, across = np.linalg.solve(np.stack([down, c[1] - c[0]], 1), rel.T)
-        ok = (areas >= max(3, 0.03 * side * side)) & (np.abs(along) < 1.3) & (np.abs(across) < 0.7)
+        ok = ((areas >= max(3, 0.03 * side * side)) & (areas <= SPOT_MAX_AREA * side * side)  # spot-sized only
+              & (np.abs(along) < 1.3) & (np.abs(across) < 0.7))
         if not ok.any():
             return 0.0  # spot covered (another wand's spot beside this stick doesn't count)
         best = np.argmin(np.where(ok, np.hypot(along, across), np.inf))
