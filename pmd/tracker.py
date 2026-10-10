@@ -119,16 +119,19 @@ def _child_main(conn, calib_path, exposure, core_args):
     cv2.setNumThreads(4)  # the little cores on this SoC slow OpenCV's pool down; 4 is fastest
     try:
         calib = Calibration.load(calib_path)
-        cam = Camera()
-        cam.manual_exposure(exposure or calib.exposure * 2)
+        cam = Camera(gray=True)
+        cam.manual_exposure(exposure or calib.exposure)
     except Exception as e:  # report instead of leaving the parent waiting
         conn.send(("error", repr(e)))
         return
     core = _Core(cam, calib, **core_args)
     conn.send(("ready", None))
     sent = 0
+    ae = _AutoExposure(cam, core.table_box, exposure or calib.exposure) if not exposure else None
     try:
         while True:
+            if ae:
+                ae.step()
             version = core.wait_update(sent, timeout=0.1)
             if version != sent:
                 sent = version
@@ -145,6 +148,39 @@ def _child_main(conn, calib_path, exposure, core_args):
         core.close()
         cam.auto_exposure()
         cam.close()
+
+
+class _AutoExposure:
+    """Keep the brightest paper on the table just below saturation.
+
+    Tags lit by the projector's white plus daylight blow out easily, and
+    blown-out tags simply aren't detected; too dark costs contrast.
+    """
+
+    def __init__(self, cam, box, exposure, target=170, every=0.5):
+        self.cam, self.box, self.exposure = cam, box, float(exposure)
+        self.target, self.every = target, every
+        self._next = time.monotonic() + 1.0
+
+    def step(self):
+        now = time.monotonic()
+        if now < self._next:
+            return
+        self._next = now + self.every
+        frame, _, _ = self.cam.latest()
+        if frame is None:
+            return
+        x0, y0, x1, y1 = self.box
+        p = float(np.percentile(frame[y0:y1:4, x0:x1:4], 99.5))
+        ratio = self.target / max(p, 1.0)
+        if p >= 254:
+            ratio = 0.6  # saturated: the percentile says nothing, back off hard
+        if abs(ratio - 1) < 0.08:
+            return
+        new = float(np.clip(self.exposure * np.clip(ratio, 0.6, 1.5), 3, 400))
+        if round(new) != round(self.exposure):
+            self.exposure = new
+            self.cam.manual_exposure(round(new))
 
 
 def _mosaic(gray, boxes, pad=8):
@@ -181,10 +217,30 @@ class _Core:
         self._claimed = 0
         self._full_running = False
         self._last_full = 0.0
+        self.table_box = self._table_box()
         self._running = True
         self._threads = [threading.Thread(target=self._loop, daemon=True) for _ in range(workers)]
         for t in self._threads:
             t.start()
+
+    def _table_box(self, margin=40):
+        """Camera-pixel bounding box of the calibrated table area; full scans look only here."""
+        w, h = self.calib.cam_size
+        if not self.calib.table_poly:
+            return 0, 0, w, h
+        poly = np.array(self.calib.table_poly, float)
+        edge = np.concatenate([np.linspace(poly[i], poly[(i + 1) % len(poly)], 20) for i in range(len(poly))])
+        cam = self.calib.proj_to_cam(edge)
+        x0, y0 = np.maximum(cam.min(axis=0) - margin, 0).astype(int)
+        x1, y1 = np.minimum(cam.max(axis=0) + margin, (w, h)).astype(int)
+        return x0, y0, x1, y1
+
+    def _detect_full(self, detector, frame):
+        x0, y0, x1, y1 = self.table_box
+        found = detector.detect(frame[y0:y1, x0:x1])
+        for tag in found:
+            tag.corners = tag.corners + (x0, y0)
+        return found
 
     def state(self):
         with self._cond:
@@ -196,11 +252,10 @@ class _Core:
             return self._version
 
     def snapshot(self, path, annotate):
-        frame, _, _ = self.camera.latest()
+        frame = self.camera.latest_color()
         if frame is None:
             return
         if annotate:
-            frame = frame.copy()
             for t in self.state()[0].values():
                 cv2.polylines(frame, [t.cam_corners.astype(np.int32)], True, (0, 255, 0), 2)
             cv2.polylines(frame, [np.array(self.calib.footprint, np.int32)], True, (255, 0, 255), 2)
@@ -226,7 +281,7 @@ class _Core:
                     self._full_running = True
                     self._last_full = stamp
             try:
-                found = detector.detect(frame) if full else self._detect_roi(detector, frame, known, stamp)
+                found = self._detect_full(detector, frame) if full else self._detect_roi(detector, frame, known, stamp)
             finally:
                 if full:
                     self._full_running = False
@@ -246,10 +301,7 @@ class _Core:
                 boxes.append((x0, y0, x1, y1))
         if not boxes:
             return []
-        gray = np.empty(frame.shape[:2], np.uint8)
-        for x0, y0, x1, y1 in boxes:  # only convert what we look at
-            gray[y0:y1, x0:x1] = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
-        img, offsets = _mosaic(gray, boxes)
+        img, offsets = _mosaic(frame, boxes)
         out, seen = [], set()
         for tag in detector.detect(img):
             cx, cy = tag.center

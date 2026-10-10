@@ -22,7 +22,9 @@ def find_camera(name_hint="U20CAM"):
 
 
 class Camera:
-    def __init__(self, device=None, width=1920, height=1080, buffers=2):
+    def __init__(self, device=None, width=1920, height=1080, buffers=2, gray=False):
+        """gray=True decodes only the luma channel (about half the decode time);
+        latest_color() still gives a colour image of the newest frame."""
         self.device = device or find_camera()
         self.cap = cv2.VideoCapture(self.device, cv2.CAP_V4L2)
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
@@ -31,10 +33,13 @@ class Camera:
         self.cap.set(cv2.CAP_PROP_FPS, 30)
         # 2 buffers keeps latency low; 1 buffer makes the camera drop to 15 fps
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, buffers)
+        self.gray = gray
+        self.cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)  # hand us the raw JPEG, we decode ourselves
         if not self.cap.isOpened():
             raise RuntimeError(f"cannot open {self.device}")
         self._cond = threading.Condition()
         self._frame = None
+        self._raw = None
         self._stamp = 0.0
         self._count = 0
         self._running = True
@@ -43,12 +48,13 @@ class Camera:
 
     def _loop(self):
         while self._running:
-            ok, frame = self.cap.read()
-            if not ok:
+            ok, raw = self.cap.read()
+            frame = cv2.imdecode(raw, cv2.IMREAD_GRAYSCALE if self.gray else cv2.IMREAD_COLOR) if ok else None
+            if frame is None:
                 time.sleep(0.01)
                 continue
             with self._cond:
-                self._frame, self._stamp = frame, time.monotonic()
+                self._frame, self._raw, self._stamp = frame, raw, time.monotonic()
                 self._count += 1
                 self._cond.notify_all()
 
@@ -56,6 +62,11 @@ class Camera:
         """(frame, timestamp, sequence number) of the newest frame, frame may be None."""
         with self._cond:
             return self._frame, self._stamp, self._count
+
+    def latest_color(self):
+        with self._cond:
+            raw = self._raw
+        return None if raw is None else cv2.imdecode(raw, cv2.IMREAD_COLOR)
 
     def wait_newer(self, seq, timeout=2.0):
         with self._cond:

@@ -23,6 +23,10 @@ class TagDetector:
     def __init__(self, family=cv2.aruco.DICT_APRILTAG_36h11):
         params = cv2.aruco.DetectorParameters()
         params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+        # our tags are only ~3 camera px per cell; these recover many more of them
+        # (measured on recorded frames) at no extra cost
+        params.errorCorrectionRate = 0.8
+        params.perspectiveRemovePixelPerCell = 8
         self.detector = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(family), params)
 
     def detect(self, frame):
