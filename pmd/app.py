@@ -23,7 +23,8 @@ from .tracker import WAND_IDS
 GAMES = {"snack": SnackCastle, "pong": Pong, "pins": PinShooter, "labyrinth": Labyrinth, "sneak": Sneak,
          "water": Water}
 MENU_AFTER_S = 3.0  # all wands off the table this long -> back to the menu
-EDGE_INSET_MM = 15  # dark border inside the measured table edge
+EDGE_INSET_MM = 15  # dark border inside the measured table edge (not on the player's side)
+SPILL_MM = 120  # on the player's side the base light continues past the table edge, fading out
 
 
 class App:
@@ -44,6 +45,7 @@ class App:
         # the measured table edge is slightly generous: keep a dark border so no light spills over it
         inset = int(EDGE_INSET_MM * self.px_per_mm)
         self.table_rect = pygame.Rect(0, 0, *self.view.size).inflate(-2 * inset, -2 * inset)
+        self._spill = self._spill_bands()
         margin = int(10 * self.px_per_mm)
         self.field = self.table_rect.inflate(-2 * margin, -2 * margin)
         self.tags = self._canvas_tags()
@@ -62,8 +64,31 @@ class App:
     def _black_border(self, s):
         W, H = self.view.size
         r = self.table_rect
-        for rect in ((0, 0, W, r.top), (0, r.bottom, W, H - r.bottom), (0, 0, r.left, H), (r.right, 0, W - r.right, H)):
-            s.fill((0, 0, 0), rect)
+        sides = {"top": (0, 0, W, r.top), "bottom": (0, r.bottom, W, H - r.bottom),
+                 "left": (0, 0, r.left, H), "right": (r.right, 0, W - r.right, H)}
+        for side, rect in sides.items():
+            if side != self.facing:  # the player's side stays lit (and spills over the edge)
+                s.fill((0, 0, 0), rect)
+
+    def _spill_bands(self, n=8):
+        """Projector-space polygons for light fading out beyond the table edge on the player's side."""
+        if self.facing not in ("top", "bottom"):
+            return []
+        W, H = self.view.size
+        spill = SPILL_MM * self.px_per_mm
+        edge, out = (0.0, -1.0) if self.facing == "top" else (float(H), 1.0)
+        bands = []
+        for i in range(n):
+            y0, y1 = edge + out * spill * i / n, edge + out * spill * (i + 1) / n
+            quad = self.view.to_proj([(0, y0), (W, y0), (W, y1), (0, y1)])
+            f = 1 - (i + 0.5) / n
+            bands.append((quad, f))
+        return bands
+
+    def _draw_spill(self, screen):
+        bg = getattr(self.scene, "background", ui.BACKGROUND)
+        for quad, f in self._spill:
+            pygame.draw.polygon(screen, tuple(int(v * f) for v in bg), quad)
 
     def _canvas_tags(self):
         """Tracker poses (projector px) converted to canvas coordinates."""
@@ -113,6 +138,7 @@ class App:
         self.fx.draw(self.view.canvas, getattr(self.scene, "background", ui.BACKGROUND))
         self._black_border(self.view.canvas)
         self.view.render(self.proj.screen)
+        self._draw_spill(self.proj.screen)
 
     def run(self, duration=math.inf, snapshot_path=None, snapshot_every=5.0):
         t_prev = t_start = last_snap = time.monotonic()
