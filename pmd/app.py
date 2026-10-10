@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import numpy as np
 
+from . import ui
 from .particles import Particles
 from .projector import pygame
 from .table import TableView
@@ -103,7 +104,7 @@ class App:
         self.scene.update(dt, now, self.tags, presses)
         self.fx.update(dt)
         self.scene.draw(self.view.canvas, now)
-        self.fx.draw(self.view.canvas)
+        self.fx.draw(self.view.canvas, getattr(self.scene, "background", ui.BACKGROUND))
         self._black_border(self.view.canvas)
         self.view.render(self.proj.screen)
 

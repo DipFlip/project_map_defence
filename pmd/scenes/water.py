@@ -2,7 +2,7 @@
 
 Tags A (10) and E (14) are taps on the far edge of the table (the side the
 snack castle's text is on): turn a tag from how it lay at the start to open it
-(a quarter turn = fully open). A pours orange, E pours green. The liquid flows
+(shut for the first 25 degrees either way, fully open 90 degrees further). A pours orange, E pours green. The liquid flows
 towards the players. Every other tag is a tilting platform, and the wands'
 whole sticks are platforms too. Containers show the colour they want; fill one
 and it disappears, and a new one turns up somewhere else.
@@ -30,6 +30,8 @@ AIR_DRAG = 4.0  # 1/s: falling drops settle at ~GRAVITY/AIR_DRAG and stay close 
 DROP_MM = 3.0  # particle radius
 MAX_PARTICLES = 700
 FLOW_PER_S = 55  # particles per second from a fully open tap
+CLOSED_ZONE = math.radians(25)  # a tap stays shut for this much turning either way
+OPEN_SPAN = math.radians(90)  # then opens gradually over this much more turning
 CUP_W_MM, CUP_H_MM = 70, 50
 CUP_FILL = 40  # particles of the right colour to complete a container
 CUPS = 3
@@ -89,7 +91,7 @@ class Water:
             if k in PIPES or not 10 <= k <= 19:
                 continue
             if k in WAND_IDS:  # the whole stick, from the tag to the end of the handle
-                segs.append((t.pos + t.forward * t.size * 0.5, t.pos - t.forward * t.size * 4.4, t.size * 0.45))
+                segs.append((t.pos + t.forward * t.size * 0.5, t.pos - t.forward * t.size * 5.6, t.size * 0.45))
             else:  # a plank across the tag, tilting with it
                 across = np.array([-t.forward[1], t.forward[0]])
                 segs.append((t.pos - across * t.size * 1.4, t.pos + across * t.size * 1.4, t.size * 0.2))
@@ -117,8 +119,7 @@ class Water:
             if t is None:
                 continue
             ref = self.valve_ref.setdefault(k, t.angle)
-            turn = abs((t.angle - ref + math.pi) % (2 * math.pi) - math.pi)
-            opening = min(1.0, turn / (math.pi / 2))
+            opening = self.opening(t.angle, ref)
             was = self.emit_acc.get((k, "open"), 0.0)
             if (opening > 0.1) != (was > 0.1):
                 self.app.sound.play("valve")
@@ -131,6 +132,12 @@ class Water:
             nozzle = t.pos + np.array([0.0, -1.0]) * t.size * 0.9
             jitter = np.random.uniform(-1, 1, (n, 2)) * self.r
             self._add(nozzle + jitter, np.tile([0.0, -60.0 * self.mm], (n, 1)) + jitter * 0.5, kind, now)
+
+    @staticmethod
+    def opening(angle, ref):
+        """0..1 from how far a tap tag is turned from its closed position (closed zone first)."""
+        turn = abs((angle - ref + math.pi) % (2 * math.pi) - math.pi)
+        return float(np.clip((turn - CLOSED_ZONE) / OPEN_SPAN, 0, 1))
 
     def _add(self, p, v, kind, now):
         self.p = np.vstack([self.p, p])
@@ -221,21 +228,48 @@ class Water:
         for a, b, half in self.segments(tags)[: -3 * len(self.cups) or None]:  # platforms (not cup walls)
             pygame.draw.line(s, (170, 170, 180), a, b, max(2, int(half * 2)))
         self._draw_fluid(s)
-        for k, kind in PIPES.items():  # taps: a pipe from the far edge, a valve wheel that turns with the tag
+        for k, kind in PIPES.items():  # taps: a pipe from the far edge and a dial around the tag
             t = tags.get(k)
             if t is None:
                 continue
-            col = LIQUIDS[kind]
-            top = (t.pos[0], self.app.view.size[1])
-            pygame.draw.line(s, (120, 120, 130), top, t.pos, int(t.size * 0.9))
-            pygame.draw.circle(s, col, t.pos, t.size * 1.3, max(2, int(2 * self.mm)))
-            for i in range(4):
-                a = t.angle + i * math.pi / 2
-                pygame.draw.line(s, col, t.pos + np.array([math.cos(a), math.sin(a)]) * t.size * 0.8,
-                                 t.pos + np.array([math.cos(a), math.sin(a)]) * t.size * 1.3, 3)
+            self._draw_tap(s, t, kind)
         W, H = self.app.view.size
         ui.text(s, self.font, f"containers filled: {self.score}   (turn tag A or E to open a tap)",
                 (W / 2, H * 0.03), (200, 200, 200), self.app.facing)
+
+    def _draw_tap(self, s, t, kind):
+        """Dial: grey closed zone, an arc brightening towards fully open, a needle for where it points."""
+        col = LIQUIDS[kind]
+        ref = self.valve_ref.get(t.id, t.angle)
+        top = (t.pos[0], self.app.view.size[1])
+        pygame.draw.line(s, (120, 120, 130), top, t.pos, int(t.size * 0.9))
+        r_in, r_out = t.size * 1.25, t.size * 1.7
+
+        def arc(a0, a1, color):
+            ang = np.linspace(a0, a1, 12)
+            pts = [t.pos + np.array([math.cos(a), math.sin(a)]) * r_out for a in ang] + \
+                  [t.pos + np.array([math.cos(a), math.sin(a)]) * r_in for a in ang[::-1]]
+            pygame.draw.polygon(s, color, pts)
+
+        arc(ref - CLOSED_ZONE, ref + CLOSED_ZONE, (110, 110, 110))  # closed
+        steps = 6
+        for sign in (-1, 1):  # opening range on both sides, brighter towards fully open
+            for i in range(steps):
+                a0 = ref + sign * (CLOSED_ZONE + OPEN_SPAN * i / steps)
+                a1 = ref + sign * (CLOSED_ZONE + OPEN_SPAN * (i + 1) / steps)
+                f = 0.3 + 0.7 * (i + 1) / steps
+                arc(min(a0, a1), max(a0, a1), tuple(int(v * f) for v in col))
+        opening = self.opening(t.angle, ref)
+        d = np.array([math.cos(t.angle), math.sin(t.angle)])
+        side = np.array([-d[1], d[0]])
+        tip = t.pos + d * r_out * 1.35
+        pygame.draw.line(s, (255, 255, 255), t.pos + d * t.size * 0.7, tip, max(4, int(3 * self.mm)))
+        pygame.draw.polygon(s, (255, 255, 255), [tip + d * t.size * 0.5, tip + side * t.size * 0.35, tip - side * t.size * 0.35])
+        bar = pygame.Rect(0, 0, int(t.size * 0.35), int(t.size * 2.4))  # flow bar beside the dial
+        bar.center = (int(t.pos[0] + r_out + t.size * 0.7), int(t.pos[1]))
+        pygame.draw.rect(s, (60, 60, 60), bar)
+        fill = int(bar.height * opening)
+        pygame.draw.rect(s, col, (bar.left, bar.bottom - fill, bar.width, fill))
 
     def _draw_fluid(self, s):
         """Metaballs per liquid: splat drops at low resolution, blur, turn the blurred field

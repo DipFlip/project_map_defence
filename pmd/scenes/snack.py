@@ -77,6 +77,7 @@ class Mouse:
 
 class SnackCastle:
     title = "Snack Castle"
+    background = (80, 100, 80)  # particles fade into this
 
     def __init__(self, app):
         self.app, self.proj, self.calib = app, app.proj, app.calib
@@ -150,7 +151,7 @@ class SnackCastle:
 
     def _render_background(self):
         s = pygame.Surface(self.app.view.size)
-        s.fill((80, 100, 80))  # green base light (tags stay lit)
+        s.fill(self.background)  # green base light (tags stay lit)
         c = self.cell
         for r in range(self.rows):
             for col in range(self.cols):

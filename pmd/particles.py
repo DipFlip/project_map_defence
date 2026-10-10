@@ -63,10 +63,12 @@ class Particles:
         for name in ("p", "v", "life", "age", "size", "color", "drag"):
             setattr(self, name, getattr(self, name)[keep])
 
-    def draw(self, surf):
-        fade = 1 - self.age / self.life
+    def draw(self, surf, background=(90, 90, 90)):
+        """Particles shrink and fade into the background colour (not to black: dark specks)."""
+        fade = np.minimum(1.0, (1 - self.age / self.life) * 1.5)
         for p, s, c, f in zip(self.p, self.size, self.color, fade):
-            pygame.draw.circle(surf, tuple(int(v * min(1.0, f * 1.5)) for v in c), p, max(1.0, s * (0.4 + 0.6 * f)))
+            col = tuple(int(v * f + b * (1 - f)) for v, b in zip(c, background))
+            pygame.draw.circle(surf, col, p, max(1.0, s * (0.4 + 0.6 * f)))
 
     def clear(self):
         self.p = self.p[:0]

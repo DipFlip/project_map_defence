@@ -76,7 +76,8 @@ nearby guards running.
 
 ## Water
 Tags A (10) and E (14) are taps on the far edge (the snack castle text side): turn
-one a quarter turn from how it lay to open it fully. A pours orange, E green; the
+one from how it lay to open it (shut for the first 25° either way, fully open 90°
+further; the dial shows where it points). A pours orange, E green; the
 liquid flows towards the players. Every other tag is a tilting plank and each wand's
 whole stick is a platform. Fill the containers with the colour they show (wrong
 liquid fizzles away); full ones vanish and new ones appear.
