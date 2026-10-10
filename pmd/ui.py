@@ -8,8 +8,11 @@ from .projector import pygame
 # text upright for them. "bottom" is the projector's own bottom edge.
 FACING = {"bottom": 0, "top": 180, "left": -90, "right": 90}
 
-BACKGROUND = (45, 45, 45)  # dim base light everywhere: tags and spots stay lit in a dark room
-QUIET = BACKGROUND  # steady light under wand tags and their spots (same as the background: invisible)
+BACKGROUND = (35, 35, 35)  # dim base light everywhere (brighter washes out colours: see QUIET)
+# No projector light at all on wand tags and spots: this projector shows red, green
+# and blue one after another, and at the camera's short exposure its light gives
+# each frame a different colour cast, which hides the blue spots. Room light is steady.
+QUIET = (0, 0, 0)
 
 
 def text(surf, font, msg, center, color=(220, 220, 220), facing="bottom"):
@@ -55,10 +58,11 @@ def _fits(c, half, s, poly, margin):
 
 
 def quiet_wand(surf, tag, color=QUIET):
-    """Steady neutral light over a wand's tag and its button patch.
+    """No projector light over a wand's tag, stick and button spot.
 
-    Nothing the game draws should land there: changing light on the tag or
-    the patch makes detection and button presses unreliable.
+    Nothing the game draws should land there either: changing light on the tag
+    or the spot makes detection and button presses unreliable.
     """
     pygame.draw.circle(surf, color, tag.pos, tag.size * 0.95)
-    pygame.draw.circle(surf, color, tag.button_pos(), tag.size * 0.75)
+    pygame.draw.line(surf, color, tag.pos, tag.button_pos(), int(tag.size * 1.4))
+    pygame.draw.circle(surf, color, tag.button_pos(), tag.size * 1.2)

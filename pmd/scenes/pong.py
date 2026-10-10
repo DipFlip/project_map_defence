@@ -159,9 +159,9 @@ class Pong:
     def draw(self, s, now):
         f = self.field
         s.fill(ui.BACKGROUND)
-        pygame.draw.rect(s, (40, 40, 50), f, 3)
+        pygame.draw.rect(s, (70, 70, 70), f, 3)
         for y in range(f.top, f.bottom, 40):
-            pygame.draw.line(s, (50, 50, 60), (f.centerx, y), (f.centerx, y + 20), 3)
+            pygame.draw.line(s, (75, 75, 75), (f.centerx, y), (f.centerx, y + 20), 3)
         for i, p in enumerate(self.players):
             x = f.centerx - p.dir * f.width * 0.18
             ui.text(s, self.font, str(self.score[i]), (x, f.centery), tuple(c // 2 for c in p.color), p.facing)

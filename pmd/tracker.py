@@ -67,9 +67,8 @@ def spot_mask(b, g, r):
     return (b > BLUE_PER_RED * r) & (b > BLUE_PER_GREEN * g) & (r + g + b > MIN_LIGHT)
 
 
-MIN_LIGHT = 0.15  # ignore pixels darker than this (r+g+b, white = 3): colour is noise there
+MIN_LIGHT = 0.1  # ignore pixels darker than this (r+g+b, white = 3): colour is noise there
 BUTTON_MIN_LEVEL = 0.15  # visible level never learned below this (a wand that starts covered)
-STILL_PX = 1.0  # position wobble (projector px, ~0.6 mm) below which a wand counts as lying still
 # Thresholds as a fraction of each wand's own learned "visible" level (wands differ:
 # 0.9 to 1.8 when visible), with hysteresis. Covered reads ~0.
 PRESS_BELOW, RELEASE_ABOVE = 0.4, 0.6
@@ -239,18 +238,18 @@ def _child_main(conn, calib_path, exposure, core_args):
 
 # camera exposure limits (0.1 ms units). Shorter than ~1 ms catches only part of the
 # projector's colour cycle (striped image, tags detected 8x/s instead of 30x/s
-# under bright projection); longer than ~3 ms overexposes under bright projection.
-EXPOSURE_RANGE = (12, 30)
+# under bright projection); the upper limit keeps motion blur of moving wands small.
+EXPOSURE_RANGE = (12, 60)
 
 
 class _AutoExposure:
-    """Keep the brightest paper on the table just below saturation.
+    """Keep the table at a medium brightness (75th percentile around `target`).
 
-    Tags lit by the projector's white plus daylight blow out easily, and
-    blown-out tags simply aren't detected; too dark costs contrast.
+    Metering on the brightest pixels let bright projected graphics push the
+    exposure down until the (unlit) wand spots were too dark to see.
     """
 
-    def __init__(self, cam, box, exposure, target=170, every=0.5):
+    def __init__(self, cam, box, exposure, target=130, every=0.5):
         self.cam, self.box, self.exposure = cam, box, float(exposure)
         self.target, self.every = target, every
         self._next = time.monotonic() + 1.0
@@ -264,7 +263,8 @@ class _AutoExposure:
         if frame is None:
             return
         x0, y0, x1, y1 = self.box
-        p = float(np.percentile(frame[y0:y1:4, x0:x1:4].max(axis=-1) if frame.ndim == 3 else frame[y0:y1:4, x0:x1:4], 99.5))
+        # typical table brightness, not the brightest projected graphics
+        p = float(np.percentile(frame[y0:y1:4, x0:x1:4].max(axis=-1) if frame.ndim == 3 else frame[y0:y1:4, x0:x1:4], 75))
         ratio = self.target / max(p, 1.0)
         if p >= 254:
             ratio = 0.6  # saturated: the percentile says nothing, back off hard
@@ -303,7 +303,6 @@ class _Core:
         self.camera, self.calib = camera, calib
         self.button_ids = set(button_ids)
         self._button_state = {}  # id -> pressed state, frames disagreeing, recent visible readings
-        self._trails = {}  # id -> recent (stamp, raw position) for the "lying still" test
         self.hold, self.full_scan_every = hold, full_scan_every
         # One Euro settings; position in projector px, angle in radians
         self.pos_filter = pos_filter or dict(min_cutoff=1.0, beta=0.08, d_cutoff=4.0)  # tools/tune_prediction.py
@@ -509,12 +508,7 @@ class _Core:
                 corners = corners + (pos - raw_pos)
                 ratio, pressed = (buttons or {}).get(tag.id), False
                 if tag.id in self.button_ids:
-                    trail = self._trails.setdefault(tag.id, deque())
-                    trail.append((stamp, raw_pos))
-                    while trail and stamp - trail[0][0] > 0.5:
-                        trail.popleft()
-                    motion = float(np.linalg.norm(np.std([p for _, p in trail], axis=0))) if len(trail) > 3 else 0.0
-                    pressed = self._debounce(tag.id, ratio, motion)
+                    pressed = self._debounce(tag.id, ratio)
                 self._tags[tag.id] = TrackedTag(tag.id, pos, angle, size, corners, tag.corners, stamp, vel, cam_vel,
                                                 raw_pos, ratio, pressed)
             for k in [k for k, t in self._tags.items() if now - t.last_seen > self.hold]:
@@ -522,13 +516,13 @@ class _Core:
             self._version += 1
             self._cond.notify_all()
 
-    def _debounce(self, tag_id, value, motion, press_frames=2, release_frames=4):
+    def _debounce(self, tag_id, value, press_frames=2, release_frames=4):
         """Pressed state from button values, relative to this wand's visible level.
 
         The level is the median of the wand's recent visible readings (robust to
-        single spikes). A wand lying still on the table can't start a press:
-        an arm passing over its spot covers it too (motion: projector px of
-        position wobble over the last half second; hand-held wands always wobble).
+        single spikes). (Ignoring presses from wands lying still removed arm-over-
+        wand presses in recordings, but blocked real presses on wands lying on the
+        table, so it's gone.)
         """
         st = self._button_state.setdefault(tag_id, {"pressed": False, "count": 0, "hist": deque(maxlen=90)})
         if value is None:
@@ -537,8 +531,6 @@ class _Core:
         level = max(BUTTON_MIN_LEVEL, float(np.median(hist))) if len(hist) >= 5 else max(value, BUTTON_MIN_LEVEL)
         pressed = st["pressed"]
         flip = value < PRESS_BELOW * level if not pressed else value > RELEASE_ABOVE * level
-        if not pressed and motion < STILL_PX:
-            flip = False
         st["count"] = st["count"] + 1 if flip else 0
         if st["count"] >= (release_frames if pressed else press_frames):
             st["pressed"], st["count"] = not pressed, 0  # slower release: no double presses from a flicker

@@ -85,7 +85,7 @@ def castle(surf, center, cell, snacks, max_snacks, font):
     pygame.draw.rect(surf, (90, 60, 30), door, border_top_left_radius=int(cell * 0.25),
                      border_top_right_radius=int(cell * 0.25))
     # snack pile in front of the gate: cookies, candies, crisps
-    colors = [(200, 140, 70), (230, 80, 120), (250, 220, 120), (120, 200, 255)]
+    colors = [(200, 140, 70), (230, 80, 120), (250, 220, 120), (120, 220, 200)]
     for i in range(snacks):
         ang = i * 2.4
         rad = cell * 0.12 * math.sqrt(i + 1)

@@ -317,7 +317,7 @@ class SnackCastle:
             lvl = self.levels.get(k, 0)
             if k in SLINGSHOT_IDS:
                 _, _, rng, half = slingshot_stats(lvl)
-                art.cone(s, u.pos, u.angle, half, rng * c, (60, 90, 190))
+                art.cone(s, u.pos, u.angle, half, rng * c, (40, 170, 170))
             elif k in CAT_IDS:
                 pygame.draw.circle(s, (110, 60, 20), u.pos, cat_stats(lvl)[2] * c, 2)
 
@@ -365,9 +365,9 @@ class SnackCastle:
         pygame.draw.circle(s, (255, 255, 255), u.pos, lit)  # keep the tag readable for the camera
         lvl = self.levels.get(k, 0)
         if k in SLINGSHOT_IDS:
-            pygame.draw.circle(s, (90, 140, 255), u.pos, lit + 5, 4)
+            pygame.draw.circle(s, (60, 220, 220), u.pos, lit + 5, 4)
             tip = u.pos + u.forward * (lit + 14)
-            pygame.draw.line(s, (90, 140, 255), u.pos + u.forward * (lit + 5), tip, 5)
+            pygame.draw.line(s, (60, 220, 220), u.pos + u.forward * (lit + 5), tip, 5)
         elif k in CAT_IDS:
             pygame.draw.circle(s, (255, 150, 50), u.pos, lit + 5, 4)
             for sgn in (-1, 1):  # cat ears on the tag's printed top

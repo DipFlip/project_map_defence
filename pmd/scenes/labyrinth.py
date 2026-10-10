@@ -270,7 +270,7 @@ class Labyrinth:
                                                                 np.sin(np.linspace(0, 2 * np.pi, 24))], 1), z, a, b, c)
         pygame.draw.polygon(s, (40, 200, 90), ring(self.goal, self.goal_r, LANDING_H))
         pygame.draw.polygon(s, (230, 255, 230), ring(self.goal, self.goal_r * 0.45, LANDING_H))
-        pygame.draw.lines(s, (90, 90, 160), True, ring(self.start, 12 * self.k, 0.0), 2)
+        pygame.draw.lines(s, (200, 200, 200), True, ring(self.start, 12 * self.k, 0.0), 2)
         pygame.draw.lines(s, (200, 200, 90), True, ring(self.checkpoint_pos, 10 * self.k, 0.0), 2)
         # walls as boxes
         for p, q in self.walls:

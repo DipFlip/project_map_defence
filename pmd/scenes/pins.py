@@ -156,8 +156,8 @@ class PinShooter:
     def draw(self, s, now):
         f = self.field
         s.fill(ui.BACKGROUND)
-        pygame.draw.rect(s, (40, 40, 50), f, 3)
-        pygame.draw.line(s, (40, 40, 50), (f.centerx, f.top), (f.centerx, f.bottom), 2)
+        pygame.draw.rect(s, (70, 70, 70), f, 3)
+        pygame.draw.line(s, (70, 70, 70), (f.centerx, f.top), (f.centerx, f.bottom), 2)
         tags = self.app.tags
         for i, p in enumerate(self.players):
             dim = tuple(c // 4 for c in p.color)
