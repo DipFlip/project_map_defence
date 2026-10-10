@@ -30,7 +30,7 @@ from .tags import TagDetector
 WAND_IDS = (16, 11, 13, 12)
 BUTTON_OFFSET = 2.9
 STICK_OFFSET = 1.7  # grey stick between the tag's card and the spot
-PRESS_BELOW, RELEASE_ABOVE = 0.45, 0.65  # with hysteresis
+PRESS_BELOW, RELEASE_ABOVE = 0.35, 0.55  # with hysteresis; tools/button_test.py: covered ~0, visible >0.65
 
 # physical size of the black square per tag id, for estimating mm <-> px
 TAG_MM = {**{i: 24.0 for i in range(10, 20)}, **{i: 30.0 for i in range(100, 135)}}

@@ -63,9 +63,9 @@ def main(seconds):
         if not len(v):
             print(f"{k}: no readings")
             continue
-        q = np.percentile(v, [2, 10, 25, 50, 75, 90, 98])
-        print(f"{k}: {len(v)} readings, presses {presses[k]}, percentiles 2/10/25/50/75/90/98: "
-              + " ".join(f"{x:.2f}" for x in q))
+        hist, _ = np.histogram(np.clip(v, -0.4, 1.99), bins=np.arange(-0.4, 2.01, 0.2))
+        print(f"{k}: {len(v)} readings, presses {presses[k]}, median {np.median(v):.2f}")
+        print("    " + " ".join(f"{b:+.1f}:{n}" for b, n in zip(np.arange(-0.4, 2.0, 0.2), hist)))
 
 
 if __name__ == "__main__":
