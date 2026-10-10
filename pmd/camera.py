@@ -1,6 +1,7 @@
 """Threaded USB camera capture that always exposes the newest frame."""
 import glob
 import os
+import queue
 import subprocess
 import threading
 import time
@@ -56,11 +57,8 @@ class Camera:
                 continue
             stamp = time.monotonic()
             rec = self._record
-            if rec is not None:  # raw JPEG exactly as the camera sent it, plus its timestamp
-                name = f"{self._count:06d}.jpg"
-                with open(os.path.join(rec[0], name), "wb") as f:
-                    f.write(raw.tobytes())
-                rec[1].write(f"{name},{stamp:.6f}\n")
+            if rec is not None:  # raw JPEG exactly as the camera sent it, written on another thread
+                rec.put((f"{self._count:06d}.jpg", raw.tobytes(), stamp))
             with self._cond:
                 self._frame, self._raw, self._stamp = frame, raw, stamp
                 self._count += 1
@@ -72,14 +70,31 @@ class Camera:
             return self._frame, self._stamp, self._count
 
     def start_recording(self, directory):
-        """Save every following raw frame to directory (NNNNNN.jpg + stamps.csv)."""
+        """Save every following raw frame to directory (NNNNNN.jpg + stamps.csv).
+
+        Files are written by a separate thread: writing to the SD card from the
+        capture thread stalled the camera for seconds at a time.
+        """
         os.makedirs(directory, exist_ok=True)
-        self._record = (directory, open(os.path.join(directory, "stamps.csv"), "a"))
+        q = queue.Queue()
+
+        def writer():
+            with open(os.path.join(directory, "stamps.csv"), "a") as stamps:
+                while (item := q.get()) is not None:
+                    name, data, stamp = item
+                    with open(os.path.join(directory, name), "wb") as f:
+                        f.write(data)
+                    stamps.write(f"{name},{stamp:.6f}\n")
+
+        self._record_thread = threading.Thread(target=writer, daemon=True)
+        self._record_thread.start()
+        self._record = q
 
     def stop_recording(self):
-        rec, self._record = self._record, None
-        if rec is not None:
-            rec[1].close()
+        q, self._record = self._record, None
+        if q is not None:
+            q.put(None)
+            self._record_thread.join()
 
     def latest_color(self):
         with self._cond:

@@ -49,10 +49,11 @@ def load_button_spots():
 
 BUTTON_SPOTS = load_button_spots()
 BUTTON_SEARCH = 1.6  # +- tag heights searched around the expected spot (nothing else red is near)
-# a pixel is "red" (after white-balancing against the table in the same box) when
-# red's share of r+g+b exceeds RED_SHARE and green < GREEN_PER_RED * red. Shares
-# don't change when a hand shades the spot. Measured shares: spots ~0.59 (the
-# darker one too), brown stick ~0.39, white table ~0.33; skin is typically ~0.44.
+# a pixel is "red" when red's share of r+g+b exceeds RED_SHARE and green <
+# GREEN_PER_RED * red (raw camera colours). Shares don't change when a hand shades
+# the spot. Measured shares: spots ~0.59 (the darker one too), brown stick ~0.39,
+# white table ~0.33, skin ~0.41. Checked on a recorded, labelled dataset
+# (tools/record_buttons.py, tools/analyze_buttons.py).
 RED_SHARE, GREEN_PER_RED = 0.5, 0.5
 MIN_LIGHT = 0.15  # ignore pixels darker than this (r+g+b, white = 3): colour is noise there
 BUTTON_MIN_LEVEL = 0.15  # visible level never learned below this (a wand that starts covered)
@@ -386,9 +387,7 @@ class _Core:
 
         The box is generous (BUTTON_SEARCH tag heights each way) because nothing
         else near a wand is red: tilt, angle or position errors don't matter.
-        Colours are white-balanced against the brightest pixels in the same box
-        (the table), which cancels the projector's colour stripes. Only the red
-        blob closest to the expected position counts, so another wand's spot in
+        Only the red blob closest to the expected position counts, so another wand's spot in
         the box can't hide a press: it must sit on this wand's own stick axis.
         """
         h, w = color.shape[:2]
@@ -401,11 +400,9 @@ class _Core:
         x0, y0, x1, y1 = max(x - r, 0), max(y - r, 0), min(x + r, w), min(y + r, h)
         if x1 - x0 < r or y1 - y0 < r:
             return None  # mostly outside the image
-        box = color[y0:y1, x0:x1].astype(np.float32)
-        white = np.percentile(box.reshape(-1, 3), 95, axis=0)
-        if white.min() < 20:
-            return None  # too dark to judge
-        b, g, rr = np.moveaxis(box / white, -1, 0)
+        # raw camera colours: white-balancing against the box failed when a hand
+        # filled it (skin became "white"), and the raw shares separate fine
+        b, g, rr = np.moveaxis(color[y0:y1, x0:x1].astype(np.float32) / 255.0, -1, 0)
         total = rr + g + b
         red = ((rr > RED_SHARE * total) & (g < GREEN_PER_RED * rr) & (total > MIN_LIGHT)).astype(np.uint8)
         n, _, stats, centroids = cv2.connectedComponentsWithStats(red)
@@ -495,7 +492,7 @@ class _Core:
             self._version += 1
             self._cond.notify_all()
 
-    def _debounce(self, tag_id, value, frames=2):
+    def _debounce(self, tag_id, value, press_frames=2, release_frames=4):
         """Pressed state from button values, relative to this wand's learned visible level.
 
         The level follows the wand's highest recent readings: it jumps up to new
@@ -510,8 +507,8 @@ class _Core:
             level = max(BUTTON_MIN_LEVEL, level + rate * (value - level))
             flip = value < PRESS_BELOW * level if not pressed else value > RELEASE_ABOVE * level
             count = count + 1 if flip else 0
-            if count >= frames:
-                pressed, count = not pressed, 0
+            if count >= (release_frames if pressed else press_frames):
+                pressed, count = not pressed, 0  # slower release: no double presses from a flicker
         self._button_state[tag_id] = (pressed, count, level)
         return pressed
 
