@@ -17,6 +17,7 @@ import os
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, replace
 
 import cv2
@@ -59,6 +60,7 @@ BUTTON_SEARCH = 1.6  # +- tag heights searched around the expected spot (nothing
 RED_SHARE, GREEN_PER_RED = 0.5, 0.5
 MIN_LIGHT = 0.15  # ignore pixels darker than this (r+g+b, white = 3): colour is noise there
 BUTTON_MIN_LEVEL = 0.15  # visible level never learned below this (a wand that starts covered)
+STILL_PX = 1.0  # position wobble (projector px, ~0.6 mm) below which a wand counts as lying still
 # Thresholds as a fraction of each wand's own learned "visible" level (wands differ:
 # 0.9 to 1.8 when visible), with hysteresis. Covered reads ~0.
 PRESS_BELOW, RELEASE_ABOVE = 0.4, 0.6
@@ -285,7 +287,8 @@ class _Core:
                  pos_filter=None, angle_filter=None, button_ids=WAND_IDS):
         self.camera, self.calib = camera, calib
         self.button_ids = set(button_ids)
-        self._button_state = {}  # id -> (pressed, consecutive frames disagreeing, visible level)
+        self._button_state = {}  # id -> pressed state, frames disagreeing, recent visible readings
+        self._trails = {}  # id -> recent (stamp, raw position) for the "lying still" test
         self.hold, self.full_scan_every = hold, full_scan_every
         # One Euro settings; position in projector px, angle in radians
         self.pos_filter = pos_filter or dict(min_cutoff=1.0, beta=0.08, d_cutoff=4.0)  # tools/tune_prediction.py
@@ -492,7 +495,12 @@ class _Core:
                 corners = corners + (pos - raw_pos)
                 ratio, pressed = (buttons or {}).get(tag.id), False
                 if tag.id in self.button_ids:
-                    pressed = self._debounce(tag.id, ratio)
+                    trail = self._trails.setdefault(tag.id, deque())
+                    trail.append((stamp, raw_pos))
+                    while trail and stamp - trail[0][0] > 0.5:
+                        trail.popleft()
+                    motion = float(np.linalg.norm(np.std([p for _, p in trail], axis=0))) if len(trail) > 3 else 0.0
+                    pressed = self._debounce(tag.id, ratio, motion)
                 self._tags[tag.id] = TrackedTag(tag.id, pos, angle, size, corners, tag.corners, stamp, vel, cam_vel,
                                                 raw_pos, ratio, pressed)
             for k in [k for k, t in self._tags.items() if now - t.last_seen > self.hold]:
@@ -500,25 +508,29 @@ class _Core:
             self._version += 1
             self._cond.notify_all()
 
-    def _debounce(self, tag_id, value, press_frames=2, release_frames=4):
-        """Pressed state from button values, relative to this wand's learned visible level.
+    def _debounce(self, tag_id, value, motion, press_frames=2, release_frames=4):
+        """Pressed state from button values, relative to this wand's visible level.
 
-        The level follows the wand's highest recent readings: it jumps up to new
-        highs quickly and sinks slowly, whether or not the button is pressed, so a
-        wand that starts covered (or a level that's off) corrects itself.
+        The level is the median of the wand's recent visible readings (robust to
+        single spikes). A wand lying still on the table can't start a press:
+        an arm passing over its spot covers it too (motion: projector px of
+        position wobble over the last half second; hand-held wands always wobble).
         """
-        pressed, count, level = self._button_state.get(tag_id, (False, 0, None))
-        if value is not None:
-            if level is None:
-                level = value
-            rate = 0.3 if value > level else 0.003
-            level = max(BUTTON_MIN_LEVEL, level + rate * (value - level))
-            flip = value < PRESS_BELOW * level if not pressed else value > RELEASE_ABOVE * level
-            count = count + 1 if flip else 0
-            if count >= (release_frames if pressed else press_frames):
-                pressed, count = not pressed, 0  # slower release: no double presses from a flicker
-        self._button_state[tag_id] = (pressed, count, level)
-        return pressed
+        st = self._button_state.setdefault(tag_id, {"pressed": False, "count": 0, "hist": deque(maxlen=90)})
+        if value is None:
+            return st["pressed"]
+        hist = st["hist"]
+        level = max(BUTTON_MIN_LEVEL, float(np.median(hist))) if len(hist) >= 5 else max(value, BUTTON_MIN_LEVEL)
+        pressed = st["pressed"]
+        flip = value < PRESS_BELOW * level if not pressed else value > RELEASE_ABOVE * level
+        if not pressed and motion < STILL_PX:
+            flip = False
+        st["count"] = st["count"] + 1 if flip else 0
+        if st["count"] >= (release_frames if pressed else press_frames):
+            st["pressed"], st["count"] = not pressed, 0  # slower release: no double presses from a flicker
+        if not st["pressed"] and value > RELEASE_ABOVE * level:
+            hist.append(value)
+        return st["pressed"]
 
     def close(self):
         self._running = False
