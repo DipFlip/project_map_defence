@@ -43,8 +43,8 @@ class PinShooter:
         f = self.field
         self.pin_x, self.pins, self.trays = [], [], []
         for p in self.players:
-            x = p.end_x + p.dir * f.width * 0.11
-            ys = np.linspace(f.top + f.height * 0.07, f.bottom - f.height * 0.07, PINS)
+            x = p.end_x + p.dir * f.width * 0.16  # pin line, measured from the player's end
+            ys = np.linspace(f.top + f.height * 0.1, f.bottom - f.height * 0.1, PINS)  # clear of the ball returns
             self.pin_x.append(x)
             self.pins.append([[np.array([x, y]), None] for y in ys])  # [pos, knocked down at]
             # ball return against the wall on the player's right-hand side, halfway

@@ -30,8 +30,10 @@ from .tags import TagDetector
 WAND_IDS = (16, 11, 13, 12)
 BUTTON_OFFSET = 2.9
 STICK_OFFSET = 1.7  # grey stick between the tag's card and the spot
-BUTTON_MAX_SPEED = 600  # camera px/s (~0.6 m/s): ignore the button while moving faster
-PRESS_BELOW, RELEASE_ABOVE = 0.35, 0.55  # with hysteresis; tools/button_test.py: covered ~0, visible >0.65
+BUTTON_MAX_SPEED = 1200  # camera px/s (~1.2 m/s): ignore the button while swung faster
+# Thresholds as a fraction of each wand's own learned "visible" level (wands differ:
+# 0.9 to 1.8 when visible), with hysteresis. Covered reads ~0.
+PRESS_BELOW, RELEASE_ABOVE = 0.4, 0.6
 
 # physical size of the black square per tag id, for estimating mm <-> px
 TAG_MM = {**{i: 24.0 for i in range(10, 20)}, **{i: 30.0 for i in range(100, 135)}}
@@ -244,7 +246,7 @@ class _Core:
                  pos_filter=None, angle_filter=None, button_ids=WAND_IDS, button_offset=BUTTON_OFFSET):
         self.camera, self.calib = camera, calib
         self.button_ids, self.button_offset = set(button_ids), button_offset
-        self._button_state = {}  # id -> (pressed, consecutive frames disagreeing)
+        self._button_state = {}  # id -> (pressed, consecutive frames disagreeing, visible level)
         self.hold, self.full_scan_every = hold, full_scan_every
         # One Euro settings; position in projector px, angle in radians
         self.pos_filter = pos_filter or dict(min_cutoff=1.0, beta=0.08, d_cutoff=4.0)  # tools/tune_prediction.py
@@ -348,9 +350,12 @@ class _Core:
     def _sample_button(self, frame, c):
         """Button spot contrast: (spot - stick) / (card - stick); ~1 visible, ~0 covered.
 
-        The spot is ~3 tag heights from the tag, so small angle or tilt errors
-        move it noticeably: take the brightest spot-sized area near where the
-        spot should be, and the darkest area near where the stick should be.
+        Positions are extrapolated along the tag's edges in the image. (A full
+        perspective fit from a ~24 px tag is noisier: its corner errors land the
+        point up to 0.3 tag heights off, 3 tag heights out.) The spot is ~3 tag
+        heights out, so small angle errors still move it: take the brightest
+        spot-sized area near where the spot should be, and the darkest area near
+        where the stick should be.
         """
         h, w = frame.shape[:2]
         center = c.mean(axis=0)
@@ -451,14 +456,17 @@ class _Core:
             self._version += 1
             self._cond.notify_all()
 
-    def _debounce(self, tag_id, ratio, frames=3):
-        pressed, count = self._button_state.get(tag_id, (False, 0))
-        if ratio is not None:
-            flip = ratio < PRESS_BELOW if not pressed else ratio > RELEASE_ABOVE
+    def _debounce(self, tag_id, value, frames=2):
+        """Pressed state from button values, relative to this wand's learned visible level."""
+        pressed, count, level = self._button_state.get(tag_id, (False, 0, 1.0))
+        if value is not None:
+            if not pressed and value > 0.6 * level:
+                level += 0.05 * (value - level)  # slowly track how bright this spot is when visible
+            flip = value < PRESS_BELOW * level if not pressed else value > RELEASE_ABOVE * level
             count = count + 1 if flip else 0
             if count >= frames:
                 pressed, count = not pressed, 0
-        self._button_state[tag_id] = (pressed, count)
+        self._button_state[tag_id] = (pressed, count, level)
         return pressed
 
     def close(self):
