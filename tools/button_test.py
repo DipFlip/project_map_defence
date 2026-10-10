@@ -2,7 +2,7 @@
 
     .venv/bin/python tools/button_test.py [seconds]
 
-Cover and uncover each wand's white spot a few times. At the end it prints the
+Cover and uncover each wand's red spot a few times, also while moving and tilting. At the end it prints the
 value distribution per wand, to pick PRESS_BELOW / RELEASE_ABOVE in pmd/tracker.py.
 """
 import os
@@ -50,7 +50,7 @@ def main(seconds):
                 ui.quiet_wand(s, t)
                 label = "--" if t.button is None else f"{t.button:.2f}"
                 ui.text(s, font, f"{k}: {label}", t.pos + t.forward * t.size * 2.4, color)
-            ui.text(s, font, f"cover the white spots - {t_end - time.monotonic():.0f}s",
+            ui.text(s, font, f"cover the red spots - {t_end - time.monotonic():.0f}s",
                     center, (200, 200, 200))
             proj.flip()
             proj.clock.tick(60)
@@ -63,9 +63,10 @@ def main(seconds):
         if not len(v):
             print(f"{k}: no readings")
             continue
-        hist, _ = np.histogram(np.clip(v, -0.4, 1.99), bins=np.arange(-0.4, 2.01, 0.2))
+        edges = np.arange(0, 1.01, 0.05)
+        hist, _ = np.histogram(np.clip(v, 0, 0.999), bins=edges)
         print(f"{k}: {len(v)} readings, presses {presses[k]}, median {np.median(v):.2f}")
-        print("    " + " ".join(f"{b:+.1f}:{n}" for b, n in zip(np.arange(-0.4, 2.0, 0.2), hist)))
+        print("    " + " ".join(f"{b:.2f}:{n}" for b, n in zip(edges, hist) if n))
 
 
 if __name__ == "__main__":

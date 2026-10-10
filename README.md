@@ -39,8 +39,9 @@ draws the game around them.
 - `pmd/scenes/`         menu, snack castle, pong, pin shooter; they draw in table-canvas coordinates
 
 ## Wands and the menu
-Tags G, B, D, C (16, 11, 13, 12) are handheld wands. Each has a white spot 2.9 tag
-heights below the tag (towards the printed label); covering it is a button press.
+Tags G, B, D, C (16, 11, 13, 12) are handheld wands. Each has a red spot 2.9 tag
+heights below the tag (towards the printed label); covering it is a button press
+(the tracker counts red pixels around where the spot should be).
 The games start at a menu: hold a wand over a game and press. Taking all four wands
 off the table for 3 s goes back to the menu. Players: G+B is one pair, D+C the other.
 

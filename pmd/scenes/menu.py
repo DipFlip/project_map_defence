@@ -1,4 +1,4 @@
-"""Game select: hold a wand over a game and cover its white patch to start it."""
+"""Game select: hold a wand over a game and cover its red spot to start it."""
 import math
 
 import numpy as np
@@ -38,7 +38,7 @@ class Menu:
         f = self.field
         tags = self.app.tags
         wands = [tags[k] for k in WAND_IDS if k in tags]
-        ui.text(s, self.small, "hold a wand over a game and cover its white patch", f.center + self.up * f.height * 0.4,
+        ui.text(s, self.small, "hold a wand over a game and cover its red spot", f.center + self.up * f.height * 0.4,
                 (170, 170, 170), self.facing)
         for name, tile in zip(self.choices, self.tiles):
             hover = any(tile.collidepoint(w.pos) for w in wands)

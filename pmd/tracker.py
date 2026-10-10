@@ -23,14 +23,17 @@ import numpy as np
 from .filters import OneEuro
 from .tags import TagDetector
 
-# handheld wands: a white spot BUTTON_OFFSET tag heights below the tag (printed
+# handheld wands: a red spot BUTTON_OFFSET tag heights below the tag (printed
 # down, from the tag centre; measured on the real wands) is their button.
-# Covering it is a press. The button value is the spot's contrast against the
-# grey stick just above it, normalised by the white card: ~1 visible, ~0 covered.
+# Covering it is a press. The button value is the red area found around the
+# expected spot position, in tag areas: ~0.6 visible, ~0 covered.
 WAND_IDS = (16, 11, 13, 12)
 BUTTON_OFFSET = 2.9
-STICK_OFFSET = 1.7  # grey stick between the tag's card and the spot
-BUTTON_MAX_SPEED = 1200  # camera px/s (~1.2 m/s): ignore the button while swung faster
+BUTTON_SEARCH = 0.9  # +- tag heights searched around the expected spot
+# a pixel is "red" (after white-balancing against the table in the same box) when
+# red - max(green, blue) exceeds RED_MIN and green < GREEN_PER_RED * red.
+# Measured: spots g/r ~0.3, brown stick ~0.85, white table ~1; skin is typically 0.6-0.8.
+RED_MIN, GREEN_PER_RED = 0.3, 0.5
 # Thresholds as a fraction of each wand's own learned "visible" level (wands differ:
 # 0.9 to 1.8 when visible), with hysteresis. Covered reads ~0.
 PRESS_BELOW, RELEASE_ABOVE = 0.4, 0.6
@@ -51,7 +54,7 @@ class TrackedTag:
     vel: np.ndarray = None  # projector px / s (filtered)
     cam_vel: np.ndarray = None  # camera px / s
     raw_pos: np.ndarray = None  # unfiltered projector px of the last detection
-    button: float = None  # button spot contrast, ~1 visible, ~0 covered (wands only)
+    button: float = None  # red button area in tag areas, ~0.6 visible, ~0 covered (wands only)
     pressed: bool = False  # button patch covered (debounced)
 
     @property
@@ -156,7 +159,7 @@ def _child_main(conn, calib_path, exposure, core_args):
     cv2.setNumThreads(4)  # the little cores on this SoC slow OpenCV's pool down; 4 is fastest
     try:
         calib = Calibration.load(calib_path)
-        cam = Camera(gray=True)
+        cam = Camera()  # colour: the wand buttons are red
         cam.manual_exposure(exposure or calib.exposure)
     except Exception as e:  # report instead of leaving the parent waiting
         conn.send(("error", repr(e)))
@@ -208,7 +211,7 @@ class _AutoExposure:
         if frame is None:
             return
         x0, y0, x1, y1 = self.box
-        p = float(np.percentile(frame[y0:y1:4, x0:x1:4], 99.5))
+        p = float(np.percentile(frame[y0:y1:4, x0:x1:4].max(axis=-1) if frame.ndim == 3 else frame[y0:y1:4, x0:x1:4], 99.5))
         ratio = self.target / max(p, 1.0)
         if p >= 254:
             ratio = 0.6  # saturated: the percentile says nothing, back off hard
@@ -317,9 +320,10 @@ class _Core:
     def _loop(self):
         detector = TagDetector()
         while self._running:
-            frame, stamp = self._next_frame()
-            if frame is None:
+            color, stamp = self._next_frame()
+            if color is None:
                 continue
+            frame = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
             with self._cond:
                 known = list(self._tags.values())
                 due = self._missed or stamp - self._last_full > self.full_scan_every
@@ -338,49 +342,32 @@ class _Core:
             finally:
                 if full:
                     self._full_running = False
-            buttons = {}
-            for t in found:
-                if t.id in self.button_ids:
-                    old = self._tags.get(t.id)
-                    # skip while the wand is swung around (lifting, waving): too unreliable
-                    fast = old is not None and np.linalg.norm(old.cam_vel) > BUTTON_MAX_SPEED
-                    buttons[t.id] = None if fast else self._sample_button(frame, t.corners)
+            # the tag and its button come from the same frame, so no speed limit is needed
+            buttons = {t.id: self._sample_button(color, t.corners) for t in found if t.id in self.button_ids}
             self._apply(found, stamp, "full" if full else "roi", buttons)
 
-    def _sample_button(self, frame, c):
-        """Button spot contrast: (spot - stick) / (card - stick); ~1 visible, ~0 covered.
+    def _sample_button(self, color, c):
+        """Red area around the expected button spot, in tag areas (~0.6 visible, ~0 covered).
 
-        Positions are extrapolated along the tag's edges in the image. (A full
-        perspective fit from a ~24 px tag is noisier: its corner errors land the
-        point up to 0.3 tag heights off, 3 tag heights out.) The spot is ~3 tag
-        heights out, so small angle errors still move it: take the brightest
-        spot-sized area near where the spot should be, and the darkest area near
-        where the stick should be.
+        The box is generous (BUTTON_SEARCH tag heights each way) because nothing
+        else near the spot is red: tilt or angle errors don't matter. Colours are
+        white-balanced against the brightest pixels in the same box (the table),
+        which cancels the projector's colour stripes at short exposures.
         """
-        h, w = frame.shape[:2]
-        center = c.mean(axis=0)
+        h, w = color.shape[:2]
         down = c[0] - c[3]  # printed down, one tag height long
-        right = c[1] - c[0]
         side = float(np.linalg.norm(down))
-
-        def area(p, win, box, pick):
-            """pick (max/min) of box-filtered means (box tag heights wide) within +-win of p."""
-            x, y = int(p[0]), int(p[1])
-            r, k = max(2, int(side * win)), max(2, int(side * box))
-            if x - r - k < 0 or y - r - k < 0 or x + r + k >= w or y + r + k >= h:
-                return None
-            crop = frame[y - r - k:y + r + k, x - r - k:x + r + k]
-            means = cv2.blur(crop, (k, k))[k:-k, k:-k]
-            return float(pick(means))
-
-        spot = area(center + down * self.button_offset, 0.45, 0.4, np.max)
-        stick = area(center + down * STICK_OFFSET, 0.35, 0.3, np.min)
-        # white margin around the black square, on the four sides
-        card = [area(center + v * 1.0, 0.1, 0.3, np.mean) for v in (down, -down, right, -right)]
-        card = [v for v in card if v is not None]
-        if spot is None or stick is None or not card or max(card) - stick < 8:
+        x, y = (c.mean(axis=0) + down * self.button_offset).astype(int)
+        r = int(side * BUTTON_SEARCH)
+        if r < 4 or x - r < 0 or y - r < 0 or x + r >= w or y + r >= h:
             return None
-        return (spot - stick) / (max(card) - stick)
+        box = color[y - r:y + r, x - r:x + r].astype(np.float32)
+        white = np.percentile(box.reshape(-1, 3), 95, axis=0)
+        if white.min() < 20:
+            return None  # too dark to judge
+        b, g, rr = np.moveaxis(box / white, -1, 0)
+        red = (rr - np.maximum(g, b) > RED_MIN) & (g < GREEN_PER_RED * rr)
+        return float(red.sum()) / (side * side)
 
     @staticmethod
     def _detect_roi(detector, frame, known, stamp):
