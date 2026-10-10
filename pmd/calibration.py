@@ -1,0 +1,237 @@
+"""Camera <-> projector calibration for a flat table.
+
+The table is a plane, so after removing the camera's lens distortion the
+mapping camera -> projector pixels is a single homography. We find it by
+projecting ArUco markers (plus their inverse, and subtracting the two
+captures to cancel ambient light and paper texture), collecting matching
+corner points, and fitting radial distortion + homography jointly.
+
+Projector pixels are the canonical "world" coordinates of the game: anything
+drawn at (x, y) on screen lands on the table where the camera sees
+proj_to_cam((x, y)).
+"""
+import json
+import time
+from dataclasses import dataclass, field
+
+import cv2
+import numpy as np
+from scipy.optimize import least_squares
+
+PATTERN_DICT = cv2.aruco.DICT_4X4_250
+
+
+@dataclass
+class Calibration:
+    cam_size: tuple
+    proj_size: tuple
+    K: np.ndarray  # nominal camera matrix (focal is a fixed guess; only dist is fit)
+    dist: np.ndarray  # k1, k2, p1, p2, k3
+    H: np.ndarray  # undistorted camera px -> projector px
+    exposure: int = 60
+    rms_px: float = 0.0
+    footprint: list = field(default_factory=list)  # projector outline in camera px
+    table_poly: list = field(default_factory=list)  # calibrated table area, projector px
+
+    # --- point mapping -------------------------------------------------
+    def undistort(self, pts):
+        pts = np.asarray(pts, np.float64).reshape(-1, 1, 2)
+        return cv2.undistortPoints(pts, self.K, self.dist, P=self.K).reshape(-1, 2)
+
+    def distort(self, pts):
+        pts = np.asarray(pts, np.float64).reshape(-1, 2)
+        norm = (pts - self.K[:2, 2]) / [self.K[0, 0], self.K[1, 1]]
+        obj = np.hstack([norm, np.ones((len(norm), 1))])
+        out, _ = cv2.projectPoints(obj, np.zeros(3), np.zeros(3), self.K, self.dist)
+        return out.reshape(-1, 2)
+
+    def cam_to_proj(self, pts):
+        und = self.undistort(pts).reshape(-1, 1, 2)
+        return cv2.perspectiveTransform(und, self.H).reshape(-1, 2)
+
+    def proj_to_cam(self, pts):
+        pts = np.asarray(pts, np.float64).reshape(-1, 1, 2)
+        und = cv2.perspectiveTransform(pts, np.linalg.inv(self.H)).reshape(-1, 2)
+        return self.distort(und)
+
+    def warp_camera_to_projector(self, frame):
+        """Resample a camera frame into projector pixel space (for debug views)."""
+        if not hasattr(self, "_maps"):
+            w, h = self.proj_size
+            xs, ys = np.meshgrid(np.arange(w, dtype=np.float64), np.arange(h, dtype=np.float64))
+            cam = self.proj_to_cam(np.stack([xs.ravel(), ys.ravel()], 1)).astype(np.float32)
+            self._maps = cam[:, 0].reshape(h, w), cam[:, 1].reshape(h, w)
+        return cv2.remap(frame, *self._maps, cv2.INTER_LINEAR)
+
+    # --- persistence ---------------------------------------------------
+    def save(self, path):
+        d = {
+            "cam_size": list(self.cam_size), "proj_size": list(self.proj_size),
+            "K": self.K.tolist(), "dist": self.dist.ravel().tolist(), "H": self.H.tolist(),
+            "exposure": self.exposure, "rms_px": self.rms_px, "footprint": self.footprint, "table_poly": self.table_poly,
+        }
+        with open(path, "w") as f:
+            json.dump(d, f, indent=1)
+
+    @classmethod
+    def load(cls, path):
+        with open(path) as f:
+            d = json.load(f)
+        return cls(tuple(d["cam_size"]), tuple(d["proj_size"]), np.array(d["K"]),
+                   np.array(d["dist"]), np.array(d["H"]), d["exposure"], d["rms_px"],
+                   d.get("footprint", []), d.get("table_poly", []))
+
+
+def nominal_K(cam_size, focal=None):
+    w, h = cam_size
+    f = focal or 0.55 * w
+    return np.array([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1]], np.float64)
+
+
+def fit(cam_pts, proj_pts, cam_size):
+    """Jointly fit radial distortion (k1, k2, k3) and the homography."""
+    cam_pts = np.asarray(cam_pts, np.float64)
+    proj_pts = np.asarray(proj_pts, np.float64)
+    K = nominal_K(cam_size)
+
+    def residual(p, return_H=False):
+        dist = np.array([p[0], p[1], 0, 0, p[2]])
+        und = cv2.undistortPoints(cam_pts.reshape(-1, 1, 2), K, dist, P=K).reshape(-1, 2)
+        H = np.append(p[3:], 1).reshape(3, 3)
+        q = np.hstack([und, np.ones((len(und), 1))]) @ H.T
+        r = (q[:, :2] / q[:, 2:] - proj_pts).ravel()
+        return r
+
+    # keep only the dominant plane (the table); projection spilling onto the
+    # floor or a wall gives points that disagree wildly with it
+    H0, inl = cv2.findHomography(cam_pts, proj_pts, cv2.RANSAC, 25)
+    inl = inl.ravel().astype(bool)
+    cam_pts, proj_pts = cam_pts[inl], proj_pts[inl]
+    H0 /= H0[2, 2]
+    p0 = np.concatenate([[0, 0, 0], H0.ravel()[:8]])
+    sol = least_squares(residual, p0, loss="soft_l1", f_scale=3.0, x_scale="jac")
+    # drop gross outliers (misdetected corners) and refit
+    err = np.linalg.norm(residual(sol.x).reshape(-1, 2), axis=1)
+    keep = err < max(5.0, 4 * np.median(err))
+    cam_pts, proj_pts = cam_pts[keep], proj_pts[keep]
+    sol = least_squares(residual, sol.x, x_scale="jac")
+    err = np.linalg.norm(residual(sol.x).reshape(-1, 2), axis=1)
+    dist = np.array([sol.x[0], sol.x[1], 0, 0, sol.x[2]])
+    H = np.append(sol.x[3:], 1).reshape(3, 3)
+    return K, dist, H, float(np.sqrt(np.mean(err ** 2))), proj_pts
+
+
+# --- capture procedure ---------------------------------------------------
+
+def capture(cam, proj, img, settle=0.25, n=2):
+    """Show img on the projector and return the mean of n fresh camera frames (float32 gray)."""
+    proj.show_gray(img)
+    t = time.monotonic() + settle
+    frame = cam.frame_after(t)
+    acc = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    _, _, seq = cam.latest()
+    for _ in range(n - 1):
+        frame, _, seq = cam.wait_newer(seq)
+        acc += cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    return acc / n
+
+
+def choose_exposure(cam, proj, candidates=(200, 150, 110, 80, 60, 45, 33, 25, 18), log=print):
+    W, H = proj.size
+    white = np.full((H, W), 255, np.uint8)
+    black = np.zeros((H, W), np.uint8)
+    chosen = candidates[-1]
+    for exp in candidates:
+        cam.manual_exposure(exp)
+        w = capture(cam, proj, white, settle=0.4)
+        b = capture(cam, proj, black, settle=0.3)
+        lit = (w - b) > 25
+        if lit.sum() < 1000:
+            continue
+        p99 = np.percentile(w[lit], 99)
+        log(f"  exposure {exp}: lit white p99={p99:.0f}")
+        if p99 < 235:
+            chosen = exp
+            break
+    cam.manual_exposure(chosen)
+    return chosen
+
+
+def marker_pattern(size, marker_px, spacing, offset, dictionary, first_id=0):
+    """White image with a grid of markers; returns image and {id: 4x2 corners}."""
+    W, H = size
+    img = np.full((H, W), 255, np.uint8)
+    corners = {}
+    k = first_id
+    y = offset[1]
+    while y + marker_px <= H:
+        x = offset[0]
+        while x + marker_px <= W:
+            if k >= dictionary.bytesList.shape[0]:
+                return img, corners
+            img[y:y + marker_px, x:x + marker_px] = cv2.aruco.generateImageMarker(dictionary, k, marker_px)
+            # outer corners of the black border, matching detectMarkers ordering
+            corners[k] = np.array([[x, y], [x + marker_px, y], [x + marker_px, y + marker_px], [x, y + marker_px]],
+                                  np.float64) - 0.5
+            k += 1
+            x += spacing
+        y += spacing
+    return img, corners
+
+
+def detect_projected(cam, proj, img, dictionary):
+    """Capture pattern and inverse, return detected markers in the difference image."""
+    a = capture(cam, proj, img)
+    b = capture(cam, proj, 255 - img)
+    diff = a - b
+    scale = 110.0 / max(np.percentile(np.abs(diff), 99), 1)
+    norm = np.clip(128 + diff * scale, 0, 255).astype(np.uint8)
+    params = cv2.aruco.DetectorParameters()
+    params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    det = cv2.aruco.ArucoDetector(dictionary, params)
+    corners, ids, _ = det.detectMarkers(norm)
+    found = {} if ids is None else {int(i): c.reshape(4, 2) for c, i in zip(corners, ids.ravel())}
+    return found, norm
+
+
+def run(cam, proj, log=print, debug_dir=None, marker_px=90, spacing=150):
+    W, H = proj.size
+    dictionary = cv2.aruco.getPredefinedDictionary(PATTERN_DICT)
+    log("choosing exposure...")
+    exposure = choose_exposure(cam, proj, log=log)
+    log(f"exposure = {exposure}")
+
+    cam_pts, proj_pts = [], []
+    offsets = [(30, 30), (30 + spacing // 2, 30 + spacing // 2)]
+    first_id = 0
+    for i, off in enumerate(offsets):
+        img, truth = marker_pattern((W, H), marker_px, spacing, off, dictionary, first_id)
+        found, norm = detect_projected(cam, proj, img, dictionary)
+        good = [k for k in found if k in truth]
+        log(f"pass {i}: {len(good)}/{len(truth)} markers seen")
+        for k in good:
+            cam_pts.extend(found[k])
+            proj_pts.extend(truth[k])
+        if debug_dir:
+            cv2.imwrite(f"{debug_dir}/calib_pass{i}.jpg", norm)
+        first_id = 0  # same ids per pass is fine, each pass is matched separately
+
+    if len(cam_pts) < 40:
+        raise RuntimeError(f"only {len(cam_pts)} correspondences; check focus/exposure/aim")
+
+    # projector footprint outline in the camera (white minus black)
+    w = capture(cam, proj, np.full((H, W), 255, np.uint8))
+    b = capture(cam, proj, np.zeros((H, W), np.uint8))
+    proj.fill((0, 0, 0))
+
+    cam_size = (int(w.shape[1]), int(w.shape[0]))
+    K, dist, Hm, rms, used = fit(cam_pts, proj_pts, cam_size)
+    log(f"fit: {len(used)}/{len(cam_pts)} points, rms {rms:.2f} projector px, dist {np.round(dist[[0, 1, 4]], 4)}")
+    calib = Calibration(cam_size, (W, H), K, dist, Hm, exposure, rms)
+    outline = [(0, 0), (W, 0), (W, H), (0, H)]
+    edge = np.concatenate([np.linspace(outline[i], outline[(i + 1) % 4], 50) for i in range(4)])
+    calib.footprint = calib.proj_to_cam(edge).round(1).tolist()
+    calib.table_poly = cv2.convexHull(used.astype(np.float32)).reshape(-1, 2).round(1).tolist()
+    if debug_dir:
+        cv2.imwrite(f"{debug_dir}/calib_lit.jpg", np.clip(w - b, 0, 255).astype(np.uint8))
+    return calib
