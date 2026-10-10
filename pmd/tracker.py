@@ -30,6 +30,7 @@ from .tags import TagDetector
 WAND_IDS = (16, 11, 13, 12)
 BUTTON_OFFSET = 2.9
 STICK_OFFSET = 1.7  # grey stick between the tag's card and the spot
+BUTTON_MAX_SPEED = 600  # camera px/s (~0.6 m/s): ignore the button while moving faster
 PRESS_BELOW, RELEASE_ABOVE = 0.35, 0.55  # with hysteresis; tools/button_test.py: covered ~0, visible >0.65
 
 # physical size of the black square per tag id, for estimating mm <-> px
@@ -335,27 +336,42 @@ class _Core:
             finally:
                 if full:
                     self._full_running = False
-            buttons = {t.id: self._sample_button(frame, t.corners) for t in found if t.id in self.button_ids}
+            buttons = {}
+            for t in found:
+                if t.id in self.button_ids:
+                    old = self._tags.get(t.id)
+                    # skip while the wand is swung around (lifting, waving): too unreliable
+                    fast = old is not None and np.linalg.norm(old.cam_vel) > BUTTON_MAX_SPEED
+                    buttons[t.id] = None if fast else self._sample_button(frame, t.corners)
             self._apply(found, stamp, "full" if full else "roi", buttons)
 
     def _sample_button(self, frame, c):
-        """Button spot contrast: (spot - stick) / (card - stick); ~1 visible, ~0 covered."""
+        """Button spot contrast: (spot - stick) / (card - stick); ~1 visible, ~0 covered.
+
+        The spot is ~3 tag heights from the tag, so small angle or tilt errors
+        move it noticeably: take the brightest spot-sized area near where the
+        spot should be, and the darkest area near where the stick should be.
+        """
         h, w = frame.shape[:2]
         center = c.mean(axis=0)
         down = c[0] - c[3]  # printed down, one tag height long
         right = c[1] - c[0]
         side = float(np.linalg.norm(down))
 
-        def mean_at(p, r):
-            x, y, r = int(p[0]), int(p[1]), max(2, int(side * r))
-            if x - r < 0 or y - r < 0 or x + r >= w or y + r >= h:
+        def area(p, win, box, pick):
+            """pick (max/min) of box-filtered means (box tag heights wide) within +-win of p."""
+            x, y = int(p[0]), int(p[1])
+            r, k = max(2, int(side * win)), max(2, int(side * box))
+            if x - r - k < 0 or y - r - k < 0 or x + r + k >= w or y + r + k >= h:
                 return None
-            return float(frame[y - r:y + r, x - r:x + r].mean())
+            crop = frame[y - r - k:y + r + k, x - r - k:x + r + k]
+            means = cv2.blur(crop, (k, k))[k:-k, k:-k]
+            return float(pick(means))
 
-        spot = mean_at(center + down * self.button_offset, 0.25)
-        stick = mean_at(center + down * STICK_OFFSET, 0.25)
+        spot = area(center + down * self.button_offset, 0.45, 0.4, np.max)
+        stick = area(center + down * STICK_OFFSET, 0.35, 0.3, np.min)
         # white margin around the black square, on the four sides
-        card = [mean_at(center + v * 1.0, 0.2) for v in (down, -down, right, -right)]
+        card = [area(center + v * 1.0, 0.1, 0.3, np.mean) for v in (down, -down, right, -right)]
         card = [v for v in card if v is not None]
         if spot is None or stick is None or not card or max(card) - stick < 8:
             return None
@@ -435,7 +451,7 @@ class _Core:
             self._version += 1
             self._cond.notify_all()
 
-    def _debounce(self, tag_id, ratio, frames=2):
+    def _debounce(self, tag_id, ratio, frames=3):
         pressed, count = self._button_state.get(tag_id, (False, 0))
         if ratio is not None:
             flip = ratio < PRESS_BELOW if not pressed else ratio > RELEASE_ABOVE
