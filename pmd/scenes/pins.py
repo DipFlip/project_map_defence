@@ -4,8 +4,8 @@ Players stand at the short ends. Each wand holds one ball; cover the wand's
 blue spot to fire it straight ahead (the tag's printed top). Wands block
 balls coming at you: an empty wand catches the ball (now it's yours), a
 loaded one deflects it. Balls that get past your pin line roll into your
-ball return (on the wall to your right, halfway to the centre); hold an empty
-wand in the return to pick one up.
+ball return (both returns are on the same side wall, each halfway between its
+player's end and the centre); hold an empty wand in or near it to pick one up.
 """
 import math
 import time
@@ -14,12 +14,13 @@ import numpy as np
 
 from .. import ui
 from ..projector import pygame
-from .players import make_players
+from .players import COLORS, make_players
 
 PINS = 10
 START_BALLS = 3
 BALL_MM, PIN_MM = 15, 10
 SPEED_MM = 700
+PICKUP_MARGIN = 40  # canvas px (~25 mm) around a ball return where an empty wand picks up a ball
 MAX_ANGLE = math.radians(65)  # steepest deflection off the long axis (shots can go any way)
 
 
@@ -50,12 +51,13 @@ class PinShooter:
             ys = np.linspace(f.top + f.height * 0.1, f.bottom - f.height * 0.1, PINS)  # clear of the ball returns
             self.pin_x.append(x)
             self.pins.append([[np.array([x, y]), None] for y in ys])  # [pos, knocked down at]
-            # ball return against the wall on the player's right-hand side, halfway
-            # between their end and the centre line
+            # ball returns: both against the same side wall (the one on the orange
+            # player's right hand), each halfway between its player's end and the centre line
             w, h = self.r * 2.3 * 6.5, self.r * 3  # room for all 6 balls in a row
             rect = pygame.Rect(0, 0, w, h)
             rect.centerx = int(p.end_x + p.dir * f.width / 4)
-            if p.side == "left":
+            orange = next(q for q in self.players if q.color == COLORS[1])
+            if orange.side == "left":
                 rect.bottom = f.bottom
             else:
                 rect.top = f.top
@@ -88,7 +90,7 @@ class PinShooter:
             for w in p.wands(tags):
                 loaded = self.loaded.get(w.id, False)
                 if not loaded and self.tray_balls[i] and now >= self.load_ready.get(w.id, 0) \
-                        and self.trays[i].inflate(40, 40).collidepoint(w.pos):
+                        and self.trays[i].inflate(PICKUP_MARGIN * 2, PICKUP_MARGIN * 2).collidepoint(w.pos):
                     self.tray_balls[i] -= 1
                     self.loaded[w.id] = True
                     self.effects.append(("load", w.pos.copy(), now, p.color))
@@ -188,10 +190,10 @@ class PinShooter:
                 if down is None:
                     pygame.draw.circle(s, (250, 250, 250), pos, self.pin_r)
                     pygame.draw.circle(s, (230, 150, 30), pos, self.pin_r * 0.6, 3)  # not blue: blue is the wand buttons
-                else:
-                    fade = max(0.25, 1 - (now - down) / 0.6)
-                    off = np.array([p.dir * self.pin_r * 1.5, 0]) * min(1, (now - down) / 0.3)
-                    pygame.draw.ellipse(s, tuple(int(90 * fade) for _ in range(3)),
+                elif now - down < 0.25:  # a quick tip-over flash, then the pin is gone
+                    fade = 1 - (now - down) / 0.25
+                    off = np.array([p.dir * self.pin_r * 1.5, 0]) * (1 - fade)
+                    pygame.draw.ellipse(s, tuple(int(250 * fade + ui.BACKGROUND[0] * (1 - fade)) for _ in range(3)),
                                         pygame.Rect(pos[0] + off[0] - self.pin_r * 1.6, pos[1] - self.pin_r * 0.6,
                                                     self.pin_r * 3.2, self.pin_r * 1.2))
             tray = self.trays[i]

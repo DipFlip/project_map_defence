@@ -54,8 +54,9 @@ Fast balls relax back to a calm cruising speed. First to 7.
 ## Pin shooter
 Ten pins in a line at each end. Each wand holds one ball; press to fire it wherever
 the wand points (the tag's printed top). An empty wand catches an incoming ball, a loaded one
-deflects it. Balls past your pin line roll into your ball return (corner on your
-right, halfway to the centre); hold an empty wand there to pick one up. Knock down all ten to win.
+deflects it. Balls past your pin line roll into your ball return (both returns are on the
+same side wall, each halfway between its player's end and the centre); hold an
+empty wand in or near it to pick one up. Knock down all ten to win.
 
 ## Labyrinth
 Four players, one wand each, standing at the corners. A shared tilting board in the
