@@ -91,8 +91,8 @@ class SnackCastle:
 
     # --- setup ---------------------------------------------------------
     def _build_board(self):
-        W, H = self.proj.size
-        poly = np.array(self.calib.table_poly or [(0, 0), (W, 0), (W, H), (0, H)], np.int32)
+        W, H = self.app.view.size  # canvas: the whole table, in table millimetres
+        poly = np.array([(0, 0), (W, 0), (W, H), (0, H)], np.int32)
         mask = np.zeros((H, W), np.uint8)
         cv2.fillPoly(mask, [poly], 255)
         margin = int(self.cell * 0.3)
@@ -147,11 +147,8 @@ class SnackCastle:
         return int(r), int(col)
 
     def _render_background(self):
-        s = pygame.Surface(self.proj.size)
-        s.fill((0, 0, 0))
-        poly = [tuple(p) for p in self.calib.table_poly] if self.calib.table_poly else None
-        if poly:
-            pygame.draw.polygon(s, (14, 22, 14), poly)
+        s = pygame.Surface(self.app.view.size)
+        s.fill((14, 22, 14))
         c = self.cell
         for r in range(self.rows):
             for col in range(self.cols):

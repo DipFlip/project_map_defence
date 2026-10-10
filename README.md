@@ -17,7 +17,8 @@ draws the game around them.
     sudo apt install python3-pygame v4l-utils
 
 ## Use
-    .venv/bin/python tools/calibrate.py   # whenever camera/projector/table moves
+    .venv/bin/python tools/calibrate.py   # whenever camera/projector/table moves (tags spread flat, nobody leaning over)
+    .venv/bin/python tools/table_frame.py # redo only the metric table frame
     .venv/bin/python tools/preview.py     # rings around every tag seen
     .venv/bin/python run.py               # menu + games (Esc/q quits when a keyboard is attached)
     .venv/bin/python tools/button_test.py # check the wand buttons
@@ -29,9 +30,13 @@ draws the game around them.
                         ambient light) -> joint fit of lens distortion + homography,
                         camera px <-> projector px. Saves `data/calibration.json`,
                         including `table_poly` (the area where the table plane was seen).
+- `pmd/table.py`        metric table frame: a homography projector px -> table mm fitted so every
+                        flat tag is a square of its known size, aligned with the lit table outline.
+                        Scenes draw on a canvas in table mm that is warped to the projector each frame,
+                        so shapes are true on the table despite keystone.
 - `pmd/tags.py`, `pmd/tracker.py`  tag detection on a background thread, poses in projector px
 - `pmd/app.py`          scene manager: menu, games, wand button presses, back to menu
-- `pmd/scenes/`         menu, snack castle, pong, pin shooter; projector pixels are world coordinates
+- `pmd/scenes/`         menu, snack castle, pong, pin shooter; they draw in table-canvas coordinates
 
 ## Wands and the menu
 Tags G, B, D, C (16, 11, 13, 12) are handheld wands. Each has a white spot 2.9 tag
@@ -47,7 +52,7 @@ closer for a faster return, tilt to aim. First to 7.
 Ten pins in a line at each end. Each wand holds one ball; press to fire it straight
 ahead (the tag's printed top). An empty wand catches an incoming ball, a loaded one
 deflects it. Balls past your pin line roll into your ball return (corner on your
-right); hold an empty wand there to pick one up. Knock down all ten to win.
+right, halfway to the centre); hold an empty wand there to pick one up. Knock down all ten to win.
 
 ## Snack castle: mice vs. the snacks
 Mice run from the mouse hole along the path to steal snacks from the cheese castle.

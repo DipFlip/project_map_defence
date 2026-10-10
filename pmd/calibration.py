@@ -32,6 +32,8 @@ class Calibration:
     rms_px: float = 0.0
     footprint: list = field(default_factory=list)  # projector outline in camera px
     table_poly: list = field(default_factory=list)  # calibrated table area, projector px
+    table_H: list = None  # projector px -> table mm, table edges along the axes (pmd/table.py)
+    table_size_mm: list = None  # table rectangle (long, short) in mm
 
     # --- point mapping -------------------------------------------------
     def undistort(self, pts):
@@ -69,6 +71,8 @@ class Calibration:
             "cam_size": list(self.cam_size), "proj_size": list(self.proj_size),
             "K": self.K.tolist(), "dist": self.dist.ravel().tolist(), "H": self.H.tolist(),
             "exposure": self.exposure, "rms_px": self.rms_px, "footprint": self.footprint, "table_poly": self.table_poly,
+            "table_H": None if self.table_H is None else np.asarray(self.table_H).tolist(),
+            "table_size_mm": self.table_size_mm,
         }
         with open(path, "w") as f:
             json.dump(d, f, indent=1)
@@ -79,7 +83,7 @@ class Calibration:
             d = json.load(f)
         return cls(tuple(d["cam_size"]), tuple(d["proj_size"]), np.array(d["K"]),
                    np.array(d["dist"]), np.array(d["H"]), d["exposure"], d["rms_px"],
-                   d.get("footprint", []), d.get("table_poly", []))
+                   d.get("footprint", []), d.get("table_poly", []), d.get("table_H"), d.get("table_size_mm"))
 
 
 def nominal_K(cam_size, focal=None):
@@ -234,4 +238,38 @@ def run(cam, proj, log=print, debug_dir=None, marker_px=90, spacing=150):
     calib.table_poly = cv2.convexHull(used.astype(np.float32)).reshape(-1, 2).round(1).tolist()
     if debug_dir:
         cv2.imwrite(f"{debug_dir}/calib_lit.jpg", np.clip(w - b, 0, 255).astype(np.uint8))
+    return calib
+
+
+def table_frame(cam, proj, calib, log=print, debug_dir=None):
+    """Measure the metric table frame (see pmd/table.py) and store it in calib.
+
+    Needs at least 4 tags lying flat and spread over the table, and nobody
+    leaning over it (shadows change the table outline).
+    """
+    from .table import align_to_outline, fit_metric, lit_outline
+    from .tags import TagDetector
+    from .tracker import TAG_MM
+
+    W, H = proj.size
+    cam.manual_exposure(calib.exposure)
+    gray = capture(cam, proj, np.full((H, W), 110, np.uint8), settle=0.5)
+    found = [t for t in TagDetector().detect(gray.astype(np.uint8)) if t.id in TAG_MM]
+    tags = [(calib.cam_to_proj(t.corners), TAG_MM[t.id]) for t in found]
+    log(f"table frame: {len(tags)} tags of known size: {sorted(t.id for t in found)}")
+    px_per_mm = np.median([np.linalg.norm(c[1] - c[0]) / mm for c, mm in tags]) if tags else 1.7
+    Hm, rms = fit_metric(tags, px_per_mm)
+    log(f"table frame: tags square to {rms:.2f} mm rms")
+    w = capture(cam, proj, np.full((H, W), 255, np.uint8), settle=0.5)
+    b = capture(cam, proj, np.zeros((H, W), np.uint8), settle=0.5)
+    proj.fill((0, 0, 0))
+    outline = lit_outline(np.clip(w - b, 0, 255), calib.cam_to_proj)
+    if outline is None:
+        log("table frame: no lit table area found, using the calibration markers' area")
+        outline = np.array(calib.table_poly)
+    Ht, size = align_to_outline(Hm, outline)
+    calib.table_H, calib.table_size_mm = Ht.tolist(), [round(size[0], 1), round(size[1], 1)]
+    log(f"table frame: table {size[0]:.0f} x {size[1]:.0f} mm")
+    if debug_dir:
+        cv2.imwrite(f"{debug_dir}/table_lit.jpg", np.clip(w - b, 0, 255).astype(np.uint8))
     return calib

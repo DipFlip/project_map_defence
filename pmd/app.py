@@ -1,8 +1,12 @@
 """Scene manager: menu, games, wand button edges and the return-to-menu rule."""
 import math
 import time
+from dataclasses import replace
 
-from . import ui
+import numpy as np
+
+from .projector import pygame
+from .table import TableView
 from .scenes.menu import Menu
 from .scenes.pins import PinShooter
 from .scenes.pong import Pong
@@ -15,13 +19,20 @@ MENU_AFTER_S = 3.0  # all wands off the table this long -> back to the menu
 
 class App:
     def __init__(self, proj, tracker, calib, facing="top"):
-        """facing: table edge the single-player view (menu, snack castle) is read from."""
+        """facing: table edge the single-player view (menu, snack castle) is read from.
+
+        Scenes draw on self.view.canvas, which is in table millimetres
+        (self.px_per_mm canvas px per mm, table edges along the axes), and get
+        tag poses in the same canvas coordinates.
+        """
         self.proj, self.tracker, self.calib = proj, tracker, calib
         self.facing = facing
         self.games = GAMES
-        self.px_per_mm = self._measure_scale()
-        self.field = ui.table_rect(calib, proj.size, margin=int(8 * self.px_per_mm))
-        self.tags = tracker.tags()
+        self.view = TableView(calib, proj.size, proj.screen)
+        self.px_per_mm = self.view.px_per_mm or self._measure_scale()
+        margin = int(10 * self.px_per_mm)
+        self.field = pygame.Rect(0, 0, *self.view.size).inflate(-2 * margin, -2 * margin)
+        self.tags = self._canvas_tags()
         self._was_pressed = {}
         self._wands_seen = time.monotonic()
         self.scene = Menu(self)
@@ -33,6 +44,19 @@ class App:
             self.proj.pump()
             time.sleep(0.05)
         return self.tracker.px_per_mm()
+
+    def _canvas_tags(self):
+        """Tracker poses (projector px) converted to canvas coordinates."""
+        out = {}
+        for k, t in self.tracker.tags().items():
+            corners = self.view.to_canvas(t.corners)
+            pos = self.view.to_canvas(t.pos)[0]
+            up = corners[3] - corners[0]  # printed top (see tracker.py)
+            ahead = self.view.to_canvas(t.pos + t.vel * 0.1)[0]
+            out[k] = replace(t, pos=pos, corners=corners, angle=float(np.arctan2(up[1], up[0])),
+                             size=float(np.mean(np.linalg.norm(corners - np.roll(corners, 1, 0), axis=1))),
+                             vel=(ahead - pos) / 0.1)
+        return out
 
     def switch(self, name):
         self.scene = Menu(self) if name == "menu" else self.games[name](self)
@@ -50,14 +74,15 @@ class App:
         return presses
 
     def step(self, dt, now):
-        self.tags = self.tracker.tags()
+        self.tags = self._canvas_tags()
         presses = self._presses()
         if any(k in self.tags for k in WAND_IDS):
             self._wands_seen = now
         elif not isinstance(self.scene, Menu) and now - self._wands_seen > MENU_AFTER_S:
             self.switch("menu")
         self.scene.update(dt, now, self.tags, presses)
-        self.scene.draw(self.proj.screen, now)
+        self.scene.draw(self.view.canvas, now)
+        self.view.render(self.proj.screen)
 
     def run(self, duration=math.inf, snapshot_path=None, snapshot_every=5.0):
         t_prev = t_start = last_snap = time.monotonic()

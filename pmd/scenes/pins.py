@@ -4,7 +4,8 @@ Players stand at the short ends. Each wand holds one ball; cover the wand's
 white patch to fire it straight ahead (the tag's printed top). Wands block
 balls coming at you: an empty wand catches the ball (now it's yours), a
 loaded one deflects it. Balls that get past your pin line roll into your
-ball return; hold an empty wand in the return to pick one up.
+ball return (on the wall to your right, halfway to the centre); hold an empty
+wand in the return to pick one up.
 """
 import math
 import time
@@ -46,12 +47,15 @@ class PinShooter:
             ys = np.linspace(f.top + f.height * 0.07, f.bottom - f.height * 0.07, PINS)
             self.pin_x.append(x)
             self.pins.append([[np.array([x, y]), None] for y in ys])  # [pos, knocked down at]
-            # ball return in the corner on the player's right-hand side
-            w, h = f.width * 0.075, f.height * 0.3
+            # ball return against the wall on the player's right-hand side, halfway
+            # between their end and the centre line
+            w, h = self.r * 2.3 * 6.5, self.r * 3  # room for all 6 balls in a row
+            rect = pygame.Rect(0, 0, w, h)
+            rect.centerx = int(p.end_x + p.dir * f.width / 4)
             if p.side == "left":
-                rect = pygame.Rect(f.left, f.bottom - h, w, h)
+                rect.bottom = f.bottom
             else:
-                rect = pygame.Rect(f.right - w, f.top, w, h)
+                rect.top = f.top
             self.trays.append(rect)
         self.tray_balls = [START_BALLS, START_BALLS]
         self.loaded = {}
@@ -170,10 +174,9 @@ class PinShooter:
                                                     self.pin_r * 3.2, self.pin_r * 1.2))
             tray = self.trays[i]
             pygame.draw.rect(s, p.color, tray, 3, border_radius=8)
-            for k in range(self.tray_balls[i]):
-                y = tray.top + self.r * 1.3 + k * self.r * 2.3 if p.side == "right" else \
-                    tray.bottom - self.r * 1.3 - k * self.r * 2.3
-                pygame.draw.circle(s, p.color, (tray.centerx, y), self.r)
+            for k in range(self.tray_balls[i]):  # balls lined up along the wall, nearest the player first
+                x = tray.centerx - p.dir * (tray.width / 2 - self.r * 1.3 - k * self.r * 2.3)
+                pygame.draw.circle(s, p.color, (x, tray.centery), self.r)
             standing = sum(down is None for _, down in self.pins[i])
             ui.text(s, self.font, f"pins {standing}", (f.centerx - p.dir * f.width * 0.25, f.top + f.height * 0.5),
                     tuple(c // 2 for c in p.color), p.facing)
