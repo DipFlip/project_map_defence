@@ -11,7 +11,9 @@ Latency matters more than anything here, so:
   moving); optional extrapolation along velocity can hide some of the
   camera + projector delay, but amplifies jitter, so it is off by default.
 """
+import json
 import multiprocessing as mp
+import os
 import sys
 import threading
 import time
@@ -20,21 +22,39 @@ from dataclasses import dataclass, replace
 import cv2
 import numpy as np
 
+from . import DATA_DIR
 from .filters import OneEuro
 from .tags import TagDetector
 
-# handheld wands: a red spot BUTTON_OFFSET tag heights below the tag (printed
-# down, from the tag centre; measured on the real wands) is their button.
+# handheld wands: a red spot about BUTTON_OFFSET tag heights below the tag (printed
+# down, from the tag centre) is their button; each wand's exact spot position is
+# measured by tools/measure_wands.py into data/wands.json.
 # Covering it is a press. The button value is the red area found around the
 # expected spot position, in tag areas: ~0.6 visible, ~0 covered.
 WAND_IDS = (16, 11, 13, 12)
 BUTTON_OFFSET = 2.9
+WANDS_PATH = os.path.join(DATA_DIR, "wands.json")
+
+
+def load_button_spots():
+    """id -> (tag heights printed-down, tag heights towards printed-left) of each wand's spot."""
+    spots = {k: (BUTTON_OFFSET, 0.0) for k in WAND_IDS}
+    try:
+        with open(WANDS_PATH) as f:
+            spots.update({int(k): tuple(v) for k, v in json.load(f).items()})
+    except (OSError, ValueError):
+        pass
+    return spots
+
+
+BUTTON_SPOTS = load_button_spots()
 BUTTON_SEARCH = 0.9  # +- tag heights searched around the expected spot
 # a pixel is "red" (after white-balancing against the table in the same box) when
-# red - max(green, blue) exceeds RED_MIN and green < GREEN_PER_RED * red.
-# Measured: spots g/r ~0.3 (r - max(g,b) >= 0.32 even on the darkest spot),
-# brown stick ~0.85, white table ~1; skin is typically 0.6-0.8.
-RED_MIN, GREEN_PER_RED = 0.2, 0.5
+# red's share of r+g+b exceeds RED_SHARE and green < GREEN_PER_RED * red. Shares
+# don't change when a hand shades the spot. Measured shares: spots ~0.59 (the
+# darker one too), brown stick ~0.39, white table ~0.33; skin is typically ~0.44.
+RED_SHARE, GREEN_PER_RED = 0.5, 0.5
+MIN_LIGHT = 0.15  # ignore pixels darker than this (r+g+b, white = 3): colour is noise there
 BUTTON_MIN_LEVEL = 0.15  # visible level never learned below this (a wand that starts covered)
 # Thresholds as a fraction of each wand's own learned "visible" level (wands differ:
 # 0.9 to 1.8 when visible), with hysteresis. Covered reads ~0.
@@ -67,9 +87,11 @@ class TrackedTag:
     def forward(self):
         return np.array([np.cos(self.angle), np.sin(self.angle)])
 
-    def button_pos(self, offset=None):
-        """Projector px of the white button patch below the tag (printed-down direction)."""
-        return self.pos - self.forward * self.size * (BUTTON_OFFSET if offset is None else offset)
+    def button_pos(self):
+        """Position of this wand's button spot, in the same coordinates as pos."""
+        down, left = BUTTON_SPOTS.get(self.id, (BUTTON_OFFSET, 0.0))
+        c = self.corners  # printed BR, BL, TL, TR
+        return self.pos + (c[0] - c[3]) * down + (c[1] - c[0]) * left
 
 
 def extrapolation(vel, age, predict, size, deadband=(40, 120), max_horizon=0.3):
@@ -248,9 +270,9 @@ class _Core:
     """
 
     def __init__(self, camera, calib, hold=0.4, workers=2, full_scan_every=0.2,
-                 pos_filter=None, angle_filter=None, button_ids=WAND_IDS, button_offset=BUTTON_OFFSET):
+                 pos_filter=None, angle_filter=None, button_ids=WAND_IDS):
         self.camera, self.calib = camera, calib
-        self.button_ids, self.button_offset = set(button_ids), button_offset
+        self.button_ids = set(button_ids)
         self._button_state = {}  # id -> (pressed, consecutive frames disagreeing, visible level)
         self.hold, self.full_scan_every = hold, full_scan_every
         # One Euro settings; position in projector px, angle in radians
@@ -345,10 +367,12 @@ class _Core:
                 if full:
                     self._full_running = False
             # the tag and its button come from the same frame, so no speed limit is needed
-            buttons = {t.id: self._sample_button(color, t.corners) for t in found if t.id in self.button_ids}
+            buttons = {t.id: self._sample_button(color, t.corners, BUTTON_SPOTS[t.id])
+                       for t in found if t.id in self.button_ids}
             self._apply(found, stamp, "full" if full else "roi", buttons)
 
-    def _sample_button(self, color, c):
+    @staticmethod
+    def _sample_button(color, c, spot=(BUTTON_OFFSET, 0.0)):
         """Red area around the expected button spot, in tag areas (~0.6 visible, ~0 covered).
 
         The box is generous (BUTTON_SEARCH tag heights each way) because nothing
@@ -359,7 +383,7 @@ class _Core:
         h, w = color.shape[:2]
         down = c[0] - c[3]  # printed down, one tag height long
         side = float(np.linalg.norm(down))
-        x, y = (c.mean(axis=0) + down * self.button_offset).astype(int)
+        x, y = (c.mean(axis=0) + down * spot[0] + (c[1] - c[0]) * spot[1]).astype(int)
         r = int(side * BUTTON_SEARCH)
         if r < 4 or x - r < 0 or y - r < 0 or x + r >= w or y + r >= h:
             return None
@@ -368,7 +392,8 @@ class _Core:
         if white.min() < 20:
             return None  # too dark to judge
         b, g, rr = np.moveaxis(box / white, -1, 0)
-        red = (rr - np.maximum(g, b) > RED_MIN) & (g < GREEN_PER_RED * rr)
+        total = rr + g + b
+        red = (rr > RED_SHARE * total) & (g < GREEN_PER_RED * rr) & (total > MIN_LIGHT)
         return float(red.sum()) / (side * side)
 
     @staticmethod
