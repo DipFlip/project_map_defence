@@ -63,6 +63,12 @@ class Menu:
             pygame.draw.line(s, COLORS[0], c + (-r * 2, -r), c + (-r * 2, r), 8)
             pygame.draw.line(s, COLORS[1], c + (r * 2, -r), c + (r * 2, r), 8)
             pygame.draw.circle(s, (255, 255, 230), c + (x, 0), r * 0.25)
+        elif name == "labyrinth":
+            pygame.draw.rect(s, (150, 110, 70), (c[0] - r * 1.4, c[1] - r * 1.4, r * 2.8, r * 2.8))
+            for k in range(3):
+                pygame.draw.line(s, (90, 65, 40), c + (-r * 1.4 + k * r, -r * 0.6), c + (-r * 1.4 + k * r, r * 1.4), 4)
+            pygame.draw.circle(s, (40, 200, 90), c + (r * 0.9, -r * 0.9), r * 0.3)
+            pygame.draw.circle(s, (200, 205, 220), c + (math.sin(now) * r * 0.6, r * 0.5), r * 0.22)
         elif name == "pins":
             for k in range(5):
                 pygame.draw.circle(s, (250, 250, 250), c + (r * 1.8, (k - 2) * r * 0.5), r * 0.18)

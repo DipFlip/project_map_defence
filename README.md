@@ -55,6 +55,15 @@ ahead (the tag's printed top). An empty wand catches an incoming ball, a loaded 
 deflects it. Balls past your pin line roll into your ball return (corner on your
 right, halfway to the centre); hold an empty wand there to pick one up. Knock down all ten to win.
 
+## Labyrinth
+Four players, one wand each, standing at the corners. A shared tilting board in the
+middle (half the table's short side wide); each wand's height (about 5 to 40 cm above
+the table) sets its board corner's height. Roll the ball from the start through the
+maze (avoid the holes), up the ramp onto the ledge, and jump the gap to the goal.
+Falling resets to the last checkpoint. Drawn in perspective from above the board.
+Wand heights come from how big the tag looks (`pmd/heights.py`); calibrate with
+`tools/wand_height.py` (sweep each wand slowly between its lowest and highest point).
+
 ## Snack castle: mice vs. the snacks
 Mice run from the mouse hole along the path to steal snacks from the cheese castle.
 Lose all 20 snacks and a new game starts after 8 s. Mice get stronger every 30 s.

@@ -70,12 +70,14 @@ def main():
         print(f"wand {k}: spot {down:.2f} tag heights down, {left:+.2f} towards printed left")
     try:
         with open(WANDS_PATH) as f:
-            old = json.load(f)
+            data = json.load(f)
     except (OSError, ValueError):
-        old = {}
-    old.update(spots)
+        data = {}
+    if "spots" not in data:  # older files held only the spots
+        data = {"spots": {k: v for k, v in data.items() if k.isdigit()}}
+    data["spots"].update(spots)
     with open(WANDS_PATH, "w") as f:
-        json.dump(old, f, indent=1)
+        json.dump(data, f, indent=1)
     print("saved", WANDS_PATH)
 
 

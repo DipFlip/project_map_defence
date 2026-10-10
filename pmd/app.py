@@ -7,13 +7,14 @@ import numpy as np
 
 from .projector import pygame
 from .table import TableView
+from .scenes.labyrinth import Labyrinth
 from .scenes.menu import Menu
 from .scenes.pins import PinShooter
 from .scenes.pong import Pong
 from .scenes.snack import SnackCastle
 from .tracker import WAND_IDS
 
-GAMES = {"snack": SnackCastle, "pong": Pong, "pins": PinShooter}
+GAMES = {"snack": SnackCastle, "pong": Pong, "pins": PinShooter, "labyrinth": Labyrinth}
 MENU_AFTER_S = 3.0  # all wands off the table this long -> back to the menu
 
 

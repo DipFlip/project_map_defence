@@ -41,7 +41,9 @@ def load_button_spots():
     spots = {k: (BUTTON_OFFSET, 0.0) for k in WAND_IDS}
     try:
         with open(WANDS_PATH) as f:
-            spots.update({int(k): tuple(v) for k, v in json.load(f).items()})
+            data = json.load(f)
+        data = data.get("spots", data)  # older files held only the spots
+        spots.update({int(k): tuple(v) for k, v in data.items() if k.isdigit()})
     except (OSError, ValueError):
         pass
     return spots
@@ -301,6 +303,12 @@ class _Core:
         self._last_full = 0.0
         self._missed = False  # a known tag fell out of its crop: rescan the whole table
         self.table_box = self._table_box()
+        # wands held up in the air appear shifted outwards (parallax): scan wider
+        x0, y0, x1, y1 = self.table_box
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        w, h = self.calib.cam_size
+        self.scan_box = (max(0, int(cx - (cx - x0) * 1.5)), max(0, int(cy - (cy - y0) * 1.5)),
+                         min(w, int(cx + (x1 - cx) * 1.5)), min(h, int(cy + (y1 - cy) * 1.5)))
         self._running = True
         self._threads = [threading.Thread(target=self._loop, daemon=True) for _ in range(workers)]
         for t in self._threads:
@@ -319,7 +327,7 @@ class _Core:
         return x0, y0, x1, y1
 
     def _detect_full(self, detector, frame):
-        x0, y0, x1, y1 = self.table_box
+        x0, y0, x1, y1 = self.scan_box
         found = detector.detect(frame[y0:y1, x0:x1])
         for tag in found:
             tag.corners = tag.corners + (x0, y0)
