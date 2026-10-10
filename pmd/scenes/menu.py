@@ -1,0 +1,69 @@
+"""Game select: hold a wand over a game and cover its white patch to start it."""
+import math
+
+import numpy as np
+
+from .. import art, ui
+from ..projector import pygame
+from ..tracker import WAND_IDS
+from .players import COLORS, PAIRS
+
+
+class Menu:
+    title = "Menu"
+
+    def __init__(self, app):
+        self.app, self.field = app, app.field
+        f = self.field
+        self.choices = list(app.games)
+        n = len(self.choices)
+        pad = f.width * 0.03
+        w = (f.width - pad * (n + 1)) / n
+        h = f.height * 0.6
+        self.tiles = [pygame.Rect(f.left + pad + i * (w + pad), f.centery - h / 2, w, h) for i in range(n)]
+        self.font = pygame.font.SysFont(None, int(f.height * 0.09))
+        self.small = pygame.font.SysFont(None, int(f.height * 0.05))
+        self.facing = app.facing
+        self.up = np.array([0.0, 1.0]) if self.facing == "top" else np.array([0.0, -1.0])
+
+    def update(self, dt, now, tags, presses):
+        for k in presses:
+            for name, tile in zip(self.choices, self.tiles):
+                if tile.collidepoint(tags[k].pos):
+                    self.app.switch(name)
+                    return
+
+    def draw(self, s, now):
+        s.fill((0, 0, 0))
+        f = self.field
+        tags = self.app.tags
+        wands = [tags[k] for k in WAND_IDS if k in tags]
+        ui.text(s, self.small, "hold a wand over a game and cover its white patch", f.center + self.up * f.height * 0.4,
+                (170, 170, 170), self.facing)
+        for name, tile in zip(self.choices, self.tiles):
+            hover = any(tile.collidepoint(w.pos) for w in wands)
+            pygame.draw.rect(s, (25, 25, 35), tile, border_radius=16)
+            pygame.draw.rect(s, (255, 220, 120) if hover else (80, 80, 110), tile, 6 if hover else 3, border_radius=16)
+            ui.text(s, self.font, self.app.games[name].title, tile.center + self.up * tile.height * 0.32,
+                    (255, 220, 120) if hover else (200, 200, 220), self.facing)
+            self._icon(s, name, tile, now)
+        for w in wands:
+            pair = next(i for i, p in enumerate(PAIRS) if w.id in p)
+            pygame.draw.circle(s, COLORS[pair], w.pos, w.size * 1.3, 4)
+            ui.quiet_wand(s, w)
+
+    def _icon(self, s, name, tile, now):
+        c = np.array(tile.center, float)
+        r = tile.width * 0.12
+        if name == "snack":
+            art.mouse(s, c + (-r * 1.2, 0), np.array([1.0, 0.0]), r * 0.5, (160, 155, 150), now, 1.0)
+            pygame.draw.rect(s, art.CHEESE, (c[0] + r * 0.3, c[1] - r * 0.6, r * 1.2, r * 1.2))
+        elif name == "pong":
+            x = math.sin(now * 2) * r * 1.5
+            pygame.draw.line(s, COLORS[0], c + (-r * 2, -r), c + (-r * 2, r), 8)
+            pygame.draw.line(s, COLORS[1], c + (r * 2, -r), c + (r * 2, r), 8)
+            pygame.draw.circle(s, (255, 255, 230), c + (x, 0), r * 0.25)
+        elif name == "pins":
+            for k in range(5):
+                pygame.draw.circle(s, (250, 250, 250), c + (r * 1.8, (k - 2) * r * 0.5), r * 0.18)
+            pygame.draw.circle(s, COLORS[0], c + (-r * 1.2 + math.sin(now * 2) * r, 0), r * 0.35)

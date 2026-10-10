@@ -1,4 +1,4 @@
-"""Start the game. Run tools/calibrate.py first (and again whenever the camera or projector moves).
+"""Start the games (menu first). Run tools/calibrate.py first (and again whenever the camera or projector moves).
 
     .venv/bin/python run.py [seconds]
 """
@@ -8,7 +8,7 @@ import time
 
 from pmd import CALIB_PATH, DATA_DIR
 from pmd.calibration import Calibration
-from pmd.game import Game
+from pmd.app import App
 from pmd.projector import Projector
 from pmd.system import performance_governor
 from pmd.tracker import Tracker
@@ -19,13 +19,13 @@ def main():
     calib = Calibration.load(CALIB_PATH)
     tracker = Tracker(CALIB_PATH, predict=0.05)
     proj = Projector()
-    game = Game(proj, tracker, calib)
+    app = App(proj, tracker, calib)
     t0 = time.monotonic()
     try:
-        game.run(duration, snapshot_path=os.path.join(DATA_DIR, "game_cam.jpg"))
+        app.run(duration, snapshot_path=os.path.join(DATA_DIR, "game_cam.jpg"))
     finally:
         print(f"ran {time.monotonic() - t0:.0f}s, draw {proj.clock.get_fps():.0f} fps, "
-              f"detect {tracker.fps:.1f} Hz, frame->pose roi {tracker.age_ms['roi']:.0f} ms / full {tracker.age_ms['full']:.0f} ms, caught {game.score}, snacks {game.snacks}")
+              f"detect {tracker.fps:.1f} Hz, frame->pose roi {tracker.age_ms['roi']:.0f} ms / full {tracker.age_ms['full']:.0f} ms")
         tracker.close()
         proj.close()
 

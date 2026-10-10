@@ -1,4 +1,4 @@
-"""Mice vs. the snack castle: a tower defence played with tags on the table.
+"""Snack castle: mice vs. the snacks, a tower defence played with tags on the table.
 
 Everything is in projector pixels. The playfield is a grid whose cell is one
 field-tag spacing (40 mm), sized from the tags' known physical size.
@@ -15,8 +15,8 @@ import time
 import cv2
 import numpy as np
 
-from . import art
-from .projector import pygame
+from .. import art, ui
+from ..projector import pygame
 
 GRID_MM = 40.0
 COLLECTOR_IDS = {10}
@@ -74,10 +74,15 @@ class Mouse:
         return self.seg >= len(self.path) - 1
 
 
-class Game:
-    def __init__(self, proj, tracker, calib):
-        self.proj, self.tracker, self.calib = proj, tracker, calib
-        self.cell = self._measure_cell()
+class SnackCastle:
+    title = "Snack Castle"
+
+    def __init__(self, app):
+        self.app, self.proj, self.calib = app, app.proj, app.calib
+        self.cell = GRID_MM * app.px_per_mm
+        # the player stands at app.facing; text and the castle are drawn upright for them
+        self.facing = app.facing
+        self.vdown = np.array([0.0, -1.0]) if self.facing == "top" else np.array([0.0, 1.0])
         self.font = pygame.font.SysFont(None, int(self.cell * 0.55))
         self.small = pygame.font.SysFont(None, int(self.cell * 0.4))
         self.big = pygame.font.SysFont(None, int(self.cell * 1.2))
@@ -85,14 +90,6 @@ class Game:
         self.reset()
 
     # --- setup ---------------------------------------------------------
-    def _measure_cell(self):
-        """Grid cell in projector px, from the tags' known physical size."""
-        deadline = time.monotonic() + 2.0
-        while not self.tracker.tags() and time.monotonic() < deadline:
-            self.proj.pump()
-            time.sleep(0.05)
-        return GRID_MM * self.tracker.px_per_mm()
-
     def _build_board(self):
         W, H = self.proj.size
         poly = np.array(self.calib.table_poly or [(0, 0), (W, 0), (W, H), (0, H)], np.int32)
@@ -115,7 +112,7 @@ class Game:
         self.valid = np.array([[inside(r, col) for col in range(cols)] for r in range(rows)])
         self.mask = mask
 
-        # serpentine path: lanes every 4 rows, row 0 kept free for the HUD
+        # serpentine path: lanes every 4 rows; the first and last rows stay free (HUD)
         lanes = list(range(1, rows - 1, 4))
         lo, hi = 0, cols - 1
         for r in range(lanes[0], lanes[-1] + 1):
@@ -133,7 +130,13 @@ class Game:
             for k in range(n + 1):
                 self.path_cells.add(self.cell_of((ax + (bx - ax) * k / n, ay + (by - ay) * k / n)))
         self.castle_pos = np.array(pts[-1])
-        self.hud_pos = self.cell_center(0, cols // 2)
+        # HUD on the far edge as seen by the player, beside the castle when it's on that edge
+        hud_row = rows - 1 if self.facing == "top" else 0
+        castle_col = self.cell_of(self.castle_pos)[1]
+        hud_col = cols // 2
+        if abs(self.cell_of(self.castle_pos)[0] - hud_row) <= 2:
+            hud_col = (castle_col - 2) // 2 if castle_col > cols // 2 else (castle_col + 2 + cols) // 2
+        self.hud_pos = self.cell_center(hud_row, hud_col)
         self._background = self._render_background()
 
     def cell_center(self, r, col):
@@ -211,8 +214,7 @@ class Game:
         if m.hp <= 0:
             self.kill(m)
 
-    def update(self, dt, now):
-        tags = self.tracker.tags()
+    def update(self, dt, now, tags, presses):
         self.units = {k: t for k, t in tags.items() if 10 <= k <= 19}
         if self.game_over_at is not None:
             if now - self.game_over_at > RESTART_AFTER_S:
@@ -308,11 +310,10 @@ class Game:
                 self.effects.append(("upgrade", u.pos.copy(), now))
 
     # --- drawing ---------------------------------------------------------
-    def draw(self, now):
-        s = self.proj.screen
+    def draw(self, s, now):
         s.blit(self._background, (0, 0))
         c = self.cell
-        art.castle(s, self.castle_pos, c, self.snacks, MAX_SNACKS, self.small)
+        self._draw_castle(s)
 
         # weapon reach under everything else
         for k, u in self.units.items():
@@ -353,6 +354,14 @@ class Game:
 
         self._draw_hud(s, now)
 
+    def _draw_castle(self, s):
+        size = int(self.cell * 6)
+        tmp = pygame.Surface((size, size), pygame.SRCALPHA)
+        art.castle(tmp, (size / 2, size / 2), self.cell, self.snacks, MAX_SNACKS, self.small)
+        if self.facing == "top":
+            tmp = pygame.transform.rotate(tmp, 180)
+        s.blit(tmp, tmp.get_rect(center=(int(self.castle_pos[0]), int(self.castle_pos[1]))))
+
     def _draw_unit(self, s, k, u, now):
         c = self.cell
         lit = u.size * 0.85
@@ -373,15 +382,13 @@ class Game:
             pygame.draw.circle(s, art.GOLD, u.pos, lit + 5, 4)
             pygame.draw.circle(s, art.GOLD, u.pos, c * 0.9, 1)
             if self.carried:
-                t = self.font.render(f"{self.carried}", True, art.GOLD)
-                s.blit(t, t.get_rect(midleft=(u.pos[0] + lit + 10, u.pos[1])))
+                ui.text(s, self.font, f"{self.carried}", u.pos - self.vdown * (lit + 22), art.GOLD, self.facing)
         elif k in CHEST_IDS:
             box = pygame.Rect(0, 0, lit * 2 + 16, lit * 2 + 16)
             box.center = (int(u.pos[0]), int(u.pos[1]))
             pygame.draw.rect(s, (150, 95, 40), box, 6, border_radius=6)
             pygame.draw.circle(s, (120, 80, 30), u.pos, c * 1.8, 1)
-            t = self.font.render(f"{self.chest_coins}", True, art.GOLD)
-            s.blit(t, t.get_rect(midtop=(u.pos[0], box.bottom + 4)))
+            ui.text(s, self.font, f"{self.chest_coins}", u.pos + self.vdown * (lit + 30), art.GOLD, self.facing)
         if k in ATTACKER_IDS:
             art.level_pips(s, u.pos, lit + 16, lvl, (120, 255, 160))
             prog = self.upgrade_progress.get(k, 0)
@@ -391,33 +398,17 @@ class Game:
                     and k not in self.upgrade_locked:
                 cost = upgrade_cost(lvl)
                 col = (120, 255, 160) if self.chest_coins >= cost else (255, 110, 90)
-                t = self.small.render(f"upgrade {cost}", True, col)
-                s.blit(t, t.get_rect(midtop=(u.pos[0], u.pos[1] + lit + 30)))
+                ui.text(s, self.small, f"upgrade {cost}", u.pos + self.vdown * (lit + 40), col, self.facing)
 
     def _draw_hud(self, s, now):
         lvl = int(self.difficulty(now if self.game_over_at is None else self.game_over_at))
         text = f"snacks {self.snacks}    chest {self.chest_coins}    mice level {lvl}    caught {self.score}"
-        t = self.font.render(text, True, (220, 220, 200))
-        s.blit(t, t.get_rect(center=self.hud_pos))
+        ui.text(s, self.font, text, self.hud_pos, (220, 220, 200), self.facing)
         if self.game_over_at is not None:
             mid = (self.origin + np.array([self.cols, self.rows]) * self.cell / 2)
             t = self.big.render("The mice got the snacks!", True, (255, 90, 90))
-            pygame.draw.rect(s, (0, 0, 0), t.get_rect(center=mid).inflate(40, 30))
-            s.blit(t, t.get_rect(center=mid))
+            pygame.draw.rect(s, (0, 0, 0), t.get_rect(center=(int(mid[0]), int(mid[1]))).inflate(40, 30))
+            ui.text(s, self.big, "The mice got the snacks!", mid, (255, 90, 90), self.facing)
             left = RESTART_AFTER_S - (now - self.game_over_at)
-            t = self.font.render(f"caught {self.score} mice - new game in {left:.0f}", True, (220, 220, 200))
-            s.blit(t, t.get_rect(center=(mid[0], mid[1] + self.cell * 1.1)))
-
-    # --- loop --------------------------------------------------------------
-    def run(self, duration=math.inf, snapshot_path=None, snapshot_every=5.0):
-        t_prev = t_start = last_snap = time.monotonic()
-        while self.proj.pump() and time.monotonic() - t_start < duration:
-            now = time.monotonic()
-            self.update(min(now - t_prev, 0.1), now)
-            t_prev = now
-            self.draw(now)
-            self.proj.flip()
-            self.proj.clock.tick(60)
-            if snapshot_path and now - last_snap > snapshot_every:
-                self.tracker.snapshot(snapshot_path)
-                last_snap = now
+            ui.text(s, self.font, f"caught {self.score} mice - new game in {left:.0f}",
+                    mid + self.vdown * self.cell * 1.1, (220, 220, 200), self.facing)

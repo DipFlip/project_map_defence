@@ -23,6 +23,15 @@ import numpy as np
 from .filters import OneEuro
 from .tags import TagDetector
 
+# handheld wands: a white spot BUTTON_OFFSET tag heights below the tag (printed
+# down, from the tag centre; measured on the real wands) is their button.
+# Covering it is a press. The button value is the spot's contrast against the
+# grey stick just above it, normalised by the white card: ~1 visible, ~0 covered.
+WAND_IDS = (16, 11, 13, 12)
+BUTTON_OFFSET = 2.9
+STICK_OFFSET = 1.7  # grey stick between the tag's card and the spot
+PRESS_BELOW, RELEASE_ABOVE = 0.45, 0.65  # with hysteresis
+
 # physical size of the black square per tag id, for estimating mm <-> px
 TAG_MM = {**{i: 24.0 for i in range(10, 20)}, **{i: 30.0 for i in range(100, 135)}}
 
@@ -31,7 +40,7 @@ TAG_MM = {**{i: 24.0 for i in range(10, 20)}, **{i: 30.0 for i in range(100, 135
 class TrackedTag:
     id: int
     pos: np.ndarray  # projector px
-    angle: float  # radians, direction of the tag's printed "up" in projector space
+    angle: float  # radians, direction of the tag's printed top (label text upright) in projector space
     size: float  # tag side length in projector px
     corners: np.ndarray  # 4x2 projector px
     cam_corners: np.ndarray  # 4x2 camera px
@@ -39,6 +48,8 @@ class TrackedTag:
     vel: np.ndarray = None  # projector px / s (filtered)
     cam_vel: np.ndarray = None  # camera px / s
     raw_pos: np.ndarray = None  # unfiltered projector px of the last detection
+    button: float = None  # button spot contrast, ~1 visible, ~0 covered (wands only)
+    pressed: bool = False  # button patch covered (debounced)
 
     @property
     def raw_cam_center(self):
@@ -47,6 +58,10 @@ class TrackedTag:
     @property
     def forward(self):
         return np.array([np.cos(self.angle), np.sin(self.angle)])
+
+    def button_pos(self, offset=None):
+        """Projector px of the white button patch below the tag (printed-down direction)."""
+        return self.pos - self.forward * self.size * (BUTTON_OFFSET if offset is None else offset)
 
 
 def extrapolation(vel, age, predict, size, deadband=(40, 120), max_horizon=0.3):
@@ -225,8 +240,10 @@ class _Core:
     """
 
     def __init__(self, camera, calib, hold=0.4, workers=2, full_scan_every=0.2,
-                 pos_filter=None, angle_filter=None):
+                 pos_filter=None, angle_filter=None, button_ids=WAND_IDS, button_offset=BUTTON_OFFSET):
         self.camera, self.calib = camera, calib
+        self.button_ids, self.button_offset = set(button_ids), button_offset
+        self._button_state = {}  # id -> (pressed, consecutive frames disagreeing)
         self.hold, self.full_scan_every = hold, full_scan_every
         # One Euro settings; position in projector px, angle in radians
         self.pos_filter = pos_filter or dict(min_cutoff=1.0, beta=0.08, d_cutoff=4.0)  # tools/tune_prediction.py
@@ -318,7 +335,31 @@ class _Core:
             finally:
                 if full:
                     self._full_running = False
-            self._apply(found, stamp, "full" if full else "roi")
+            buttons = {t.id: self._sample_button(frame, t.corners) for t in found if t.id in self.button_ids}
+            self._apply(found, stamp, "full" if full else "roi", buttons)
+
+    def _sample_button(self, frame, c):
+        """Button spot contrast: (spot - stick) / (card - stick); ~1 visible, ~0 covered."""
+        h, w = frame.shape[:2]
+        center = c.mean(axis=0)
+        down = c[0] - c[3]  # printed down, one tag height long
+        right = c[1] - c[0]
+        side = float(np.linalg.norm(down))
+
+        def mean_at(p, r):
+            x, y, r = int(p[0]), int(p[1]), max(2, int(side * r))
+            if x - r < 0 or y - r < 0 or x + r >= w or y + r >= h:
+                return None
+            return float(frame[y - r:y + r, x - r:x + r].mean())
+
+        spot = mean_at(center + down * self.button_offset, 0.25)
+        stick = mean_at(center + down * STICK_OFFSET, 0.25)
+        # white margin around the black square, on the four sides
+        card = [mean_at(center + v * 1.0, 0.2) for v in (down, -down, right, -right)]
+        card = [v for v in card if v is not None]
+        if spot is None or stick is None or not card or max(card) - stick < 8:
+            return None
+        return (spot - stick) / (max(card) - stick)
 
     @staticmethod
     def _detect_roi(detector, frame, known, stamp):
@@ -350,7 +391,7 @@ class _Core:
                     break
         return out
 
-    def _apply(self, found, stamp, kind):
+    def _apply(self, found, stamp, kind, buttons=None):
         now = time.monotonic()
         with self._cond:
             self._n_frames += 1
@@ -364,7 +405,9 @@ class _Core:
                     continue  # a newer frame already updated this tag
                 corners = self.calib.cam_to_proj(tag.corners)
                 pos = corners.mean(axis=0)
-                up = corners[0] - corners[3]  # printed top-left minus bottom-left
+                # OpenCV's corner 0 is the printed bottom-right of the print kit's
+                # tags (checked on the kit PDF), so corner 3 -> 0 points printed-down
+                up = corners[3] - corners[0]
                 angle = float(np.arctan2(up[1], up[0]))
                 size = float(np.mean(np.linalg.norm(corners - np.roll(corners, 1, 0), axis=1)))
                 cam_vel = np.zeros(2)
@@ -382,11 +425,25 @@ class _Core:
                 angle = float(f_angle(angle, dt))
                 vel = f_pos.dx.copy()
                 corners = corners + (pos - raw_pos)
-                self._tags[tag.id] = TrackedTag(tag.id, pos, angle, size, corners, tag.corners, stamp, vel, cam_vel, raw_pos)
+                ratio, pressed = (buttons or {}).get(tag.id), False
+                if tag.id in self.button_ids:
+                    pressed = self._debounce(tag.id, ratio)
+                self._tags[tag.id] = TrackedTag(tag.id, pos, angle, size, corners, tag.corners, stamp, vel, cam_vel,
+                                                raw_pos, ratio, pressed)
             for k in [k for k, t in self._tags.items() if now - t.last_seen > self.hold]:
                 del self._tags[k]
             self._version += 1
             self._cond.notify_all()
+
+    def _debounce(self, tag_id, ratio, frames=2):
+        pressed, count = self._button_state.get(tag_id, (False, 0))
+        if ratio is not None:
+            flip = ratio < PRESS_BELOW if not pressed else ratio > RELEASE_ABOVE
+            count = count + 1 if flip else 0
+            if count >= frames:
+                pressed, count = not pressed, 0
+        self._button_state[tag_id] = (pressed, count)
+        return pressed
 
     def close(self):
         self._running = False
