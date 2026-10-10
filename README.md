@@ -30,3 +30,16 @@ draws the game around them.
                         including `table_poly` (the area where the table plane was seen).
 - `pmd/tags.py`, `pmd/tracker.py`  tag detection on a background thread, poses in projector px
 - `pmd/game.py`         game loop skeleton; projector pixels are the world coordinates
+
+## The game: mice vs. the snack castle
+Mice run from the mouse hole along the path to steal snacks from the cheese castle.
+Lose all 20 snacks and a new game starts after 8 s. Mice get stronger every 30 s.
+
+| Tag | Piece | What it does |
+|---|---|---|
+| A (10) | coin collector | slide over coins dropped by caught mice, bring them to the chest |
+| G (16) | chest | stores coins; park an attacker next to it for 1.5 s to upgrade (5, 10, 15, 20 coins) |
+| C, E, J (12, 14, 19) | cat | swipes all mice around it, slow |
+| B, D, F, H, I (11, 13, 15, 17, 18) | slingshot | shoots forward (printed top of tag), 15° cone, one grid cell reach |
+
+One grid cell is 40 mm, the spacing of the field-tag sheet.
