@@ -1,10 +1,12 @@
 """Synthesised sound effects (no audio files).
 
 Every effect is generated once at start-up from tones, noise and envelopes.
-If there is no audio output the game simply stays silent. (The Radxa's own
-audio needs a topology firmware that isn't packaged yet; a USB or Bluetooth
-speaker works.)
+Sound goes to the projector's speaker over HDMI when the board's sound card is
+there (see pmd/system.enable_hdmi_audio), otherwise to the default output; with
+no audio output at all the game simply stays silent.
 """
+import os
+
 import numpy as np
 
 from .projector import pygame
@@ -109,9 +111,16 @@ class Sound:
         self.sounds = {}
         self.volume = volume
         self._last = {}
+        from .system import enable_hdmi_audio
+
+        device = enable_hdmi_audio()
+        if device:  # play straight to the HDMI output through ALSA
+            os.environ["SDL_AUDIODRIVER"] = "alsa"
+            os.environ["AUDIODEV"] = device
         try:
             pygame.mixer.pre_init(RATE, -16, 2, 512)
             pygame.mixer.init()
+            self.device = device or "default"
             pygame.mixer.set_num_channels(24)
         except pygame.error:
             return

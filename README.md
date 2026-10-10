@@ -81,9 +81,9 @@ liquid fizzles away); full ones vanish and new ones appear.
 
 ## Sound and effects
 `pmd/sound.py` synthesises all effects at start-up; `pmd/particles.py` draws bursts,
-rings and confetti over every scene. Note: the Radxa's own audio output needs a
-topology firmware that isn't packaged yet (`QCS6490-Radxa-Dragon-Q6A-tplg.bin`), so
-plug in a USB or Bluetooth speaker to hear anything.
+rings and confetti over every scene. Sound plays through the projector's speaker over
+HDMI: that needs `firmware-qcom-audioreach` >= 1.0.4-3 (it ships the board's audio
+topology, `QCS6490-Radxa-Dragon-Q6A-tplg.bin`); the app routes the HDMI output on start.
 
 ## Snack castle: mice vs. the snacks
 Mice run from the mouse hole along the path to steal snacks from the cheese castle.
