@@ -165,7 +165,7 @@ class PinShooter:
             for pos, down in self.pins[i]:
                 if down is None:
                     pygame.draw.circle(s, (250, 250, 250), pos, self.pin_r)
-                    pygame.draw.circle(s, (220, 40, 40), pos, self.pin_r * 0.6, 3)
+                    pygame.draw.circle(s, (40, 90, 220), pos, self.pin_r * 0.6, 3)  # not red: red is the wand buttons
                 else:
                     fade = max(0.25, 1 - (now - down) / 0.6)
                     off = np.array([p.dir * self.pin_r * 1.5, 0]) * min(1, (now - down) / 0.3)

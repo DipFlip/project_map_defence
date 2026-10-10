@@ -48,7 +48,7 @@ def load_button_spots():
 
 
 BUTTON_SPOTS = load_button_spots()
-BUTTON_SEARCH = 0.9  # +- tag heights searched around the expected spot
+BUTTON_SEARCH = 1.6  # +- tag heights searched around the expected spot (nothing else red is near)
 # a pixel is "red" (after white-balancing against the table in the same box) when
 # red's share of r+g+b exceeds RED_SHARE and green < GREEN_PER_RED * red. Shares
 # don't change when a hand shades the spot. Measured shares: spots ~0.59 (the
@@ -373,28 +373,44 @@ class _Core:
 
     @staticmethod
     def _sample_button(color, c, spot=(BUTTON_OFFSET, 0.0)):
-        """Red area around the expected button spot, in tag areas (~0.6 visible, ~0 covered).
+        """Area of the red spot near where it should be, in tag areas (~0.5 visible, ~0 covered).
 
         The box is generous (BUTTON_SEARCH tag heights each way) because nothing
-        else near the spot is red: tilt or angle errors don't matter. Colours are
-        white-balanced against the brightest pixels in the same box (the table),
-        which cancels the projector's colour stripes at short exposures.
+        else near a wand is red: tilt, angle or position errors don't matter.
+        Colours are white-balanced against the brightest pixels in the same box
+        (the table), which cancels the projector's colour stripes. Only the red
+        blob closest to the expected position counts, so another wand's spot in
+        the box can't hide a press: it must sit on this wand's own stick axis.
         """
         h, w = color.shape[:2]
         down = c[0] - c[3]  # printed down, one tag height long
         side = float(np.linalg.norm(down))
         x, y = (c.mean(axis=0) + down * spot[0] + (c[1] - c[0]) * spot[1]).astype(int)
         r = int(side * BUTTON_SEARCH)
-        if r < 4 or x - r < 0 or y - r < 0 or x + r >= w or y + r >= h:
+        if r < 4:
             return None
-        box = color[y - r:y + r, x - r:x + r].astype(np.float32)
+        x0, y0, x1, y1 = max(x - r, 0), max(y - r, 0), min(x + r, w), min(y + r, h)
+        if x1 - x0 < r or y1 - y0 < r:
+            return None  # mostly outside the image
+        box = color[y0:y1, x0:x1].astype(np.float32)
         white = np.percentile(box.reshape(-1, 3), 95, axis=0)
         if white.min() < 20:
             return None  # too dark to judge
         b, g, rr = np.moveaxis(box / white, -1, 0)
         total = rr + g + b
-        red = (rr > RED_SHARE * total) & (g < GREEN_PER_RED * rr) & (total > MIN_LIGHT)
-        return float(red.sum()) / (side * side)
+        red = ((rr > RED_SHARE * total) & (g < GREEN_PER_RED * rr) & (total > MIN_LIGHT)).astype(np.uint8)
+        n, _, stats, centroids = cv2.connectedComponentsWithStats(red)
+        if n < 2:
+            return 0.0
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        # blob centres relative to the expected spot, in tag heights along / across this wand
+        rel = centroids[1:] + (x0, y0) - (x, y)
+        along, across = np.linalg.solve(np.stack([down, c[1] - c[0]], 1), rel.T)
+        ok = (areas >= max(3, 0.03 * side * side)) & (np.abs(along) < 1.3) & (np.abs(across) < 0.7)
+        if not ok.any():
+            return 0.0  # spot covered (another wand's spot beside this stick doesn't count)
+        best = np.argmin(np.where(ok, np.hypot(along, across), np.inf))
+        return float(areas[best]) / (side * side)
 
     @staticmethod
     def _detect_roi(detector, frame, known, stamp):
