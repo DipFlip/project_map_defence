@@ -39,7 +39,7 @@ class Menu:
                     return
 
     def draw(self, s, now):
-        s.fill((0, 0, 0))
+        s.fill(ui.BACKGROUND)
         f = self.field
         tags = self.app.tags
         wands = [tags[k] for k in WAND_IDS if k in tags]

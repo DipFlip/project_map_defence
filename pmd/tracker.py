@@ -51,7 +51,8 @@ def load_button_spots():
 
 
 BUTTON_SPOTS = load_button_spots()
-BUTTON_SEARCH = 1.6  # +- tag heights searched around the expected spot (nothing else that colour is near)
+BUTTON_SEARCH = 2.6  # +- tag heights of image searched around the expected spot
+SPOT_ALONG, SPOT_ACROSS = 2.2, 1.2  # a blob counts if its centre is this close to the expected spot (tag heights)
 # a pixel belongs to the (blue) spot when blue > BLUE_PER_RED * red and
 # blue > BLUE_PER_GREEN * green (raw camera colours; ratios don't change when a
 # hand shades the spot). Measured: spots blue/red ~2.2, blue/green ~2.1; brown
@@ -236,6 +237,12 @@ def _child_main(conn, calib_path, exposure, core_args):
         cam.close()
 
 
+# camera exposure limits (0.1 ms units). Shorter than ~1 ms catches only part of the
+# projector's colour cycle (striped image, tags detected 8x/s instead of 30x/s
+# under bright projection); longer than ~3 ms overexposes under bright projection.
+EXPOSURE_RANGE = (12, 30)
+
+
 class _AutoExposure:
     """Keep the brightest paper on the table just below saturation.
 
@@ -263,7 +270,7 @@ class _AutoExposure:
             ratio = 0.6  # saturated: the percentile says nothing, back off hard
         if abs(ratio - 1) < 0.08:
             return
-        new = float(np.clip(self.exposure * np.clip(ratio, 0.6, 1.5), 3, 400))
+        new = float(np.clip(self.exposure * np.clip(ratio, 0.6, 1.5), *EXPOSURE_RANGE))
         if round(new) != round(self.exposure):
             self.exposure = new
             self.cam.manual_exposure(round(new))
@@ -430,7 +437,7 @@ class _Core:
         rel = centroids[1:] + (x0, y0) - (x, y)
         along, across = np.linalg.solve(np.stack([down, c[1] - c[0]], 1), rel.T)
         ok = ((areas >= max(3, 0.03 * side * side)) & (areas <= SPOT_MAX_AREA * side * side)  # spot-sized only
-              & (np.abs(along) < 1.3) & (np.abs(across) < 0.7))
+              & (np.abs(along) < SPOT_ALONG) & (np.abs(across) < SPOT_ACROSS))
         if not ok.any():
             return 0.0  # spot covered (another wand's spot beside this stick doesn't count)
         best = np.argmin(np.where(ok, np.hypot(along, across), np.inf))

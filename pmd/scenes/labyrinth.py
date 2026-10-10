@@ -237,7 +237,7 @@ class Labyrinth:
         return tuple(int(min(255, v * f)) for v in color)
 
     def draw(self, s, now):
-        s.fill((0, 0, 0))
+        s.fill(ui.BACKGROUND)
         a, b, c, zc = self.tilt()
         h = self.half
         # board edge (thickness) then the board top

@@ -155,7 +155,7 @@ class PinShooter:
     # --- drawing ---------------------------------------------------------
     def draw(self, s, now):
         f = self.field
-        s.fill((0, 0, 0))
+        s.fill(ui.BACKGROUND)
         pygame.draw.rect(s, (40, 40, 50), f, 3)
         pygame.draw.line(s, (40, 40, 50), (f.centerx, f.top), (f.centerx, f.bottom), 2)
         tags = self.app.tags

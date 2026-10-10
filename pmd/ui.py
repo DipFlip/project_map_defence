@@ -8,7 +8,8 @@ from .projector import pygame
 # text upright for them. "bottom" is the projector's own bottom edge.
 FACING = {"bottom": 0, "top": 180, "left": -90, "right": 90}
 
-QUIET = (60, 60, 60)  # steady dim light under wand tags and their button patches
+BACKGROUND = (45, 45, 45)  # dim base light everywhere: tags and spots stay lit in a dark room
+QUIET = BACKGROUND  # steady light under wand tags and their spots (same as the background: invisible)
 
 
 def text(surf, font, msg, center, color=(220, 220, 220), facing="bottom"):

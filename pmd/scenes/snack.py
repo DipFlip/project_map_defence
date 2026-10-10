@@ -148,7 +148,7 @@ class SnackCastle:
 
     def _render_background(self):
         s = pygame.Surface(self.app.view.size)
-        s.fill((14, 22, 14))
+        s.fill((40, 55, 40))  # dim green base light (tags stay lit)
         c = self.cell
         for r in range(self.rows):
             for col in range(self.cols):
