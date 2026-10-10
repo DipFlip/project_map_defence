@@ -201,14 +201,14 @@ def _child_main(conn, calib_path, exposure, core_args):
     try:
         calib = Calibration.load(calib_path)
         cam = Camera()  # colour: the wand buttons are coloured spots
-        cam.manual_exposure(exposure or calib.exposure)
+        cam.manual_exposure(exposure or FLICKER_FREE)
     except Exception as e:  # report instead of leaving the parent waiting
         conn.send(("error", repr(e)))
         return
     core = _Core(cam, calib, **core_args)
     conn.send(("ready", None))
     sent = 0
-    ae = _AutoExposure(cam, core.table_box, exposure or calib.exposure) if not exposure else None
+    ae = _AutoExposure(cam, core.table_box, FLICKER_FREE) if not exposure else None
     try:
         while True:
             if ae:
@@ -247,7 +247,8 @@ EXPOSURE_RANGE = (12, FLICKER_FREE)
 
 
 class _AutoExposure:
-    """Keep the table at a medium brightness (75th percentile around `target`).
+    """Stay at the flicker-free exposure unless the table nearly saturates there;
+    below it, keep the table at a medium brightness (75th percentile around `target`).
 
     Metering on the brightest pixels let bright projected graphics push the
     exposure down until the (unlit) wand spots were too dark to see.
@@ -269,11 +270,16 @@ class _AutoExposure:
         x0, y0, x1, y1 = self.box
         # typical table brightness, not the brightest projected graphics
         p = float(np.percentile(frame[y0:y1:4, x0:x1:4].max(axis=-1) if frame.ndim == 3 else frame[y0:y1:4, x0:x1:4], 75))
-        ratio = self.target / max(p, 1.0)
-        if p >= 254:
-            ratio = 0.6  # saturated: the percentile says nothing, back off hard
-        if abs(ratio - 1) < 0.08:
-            return
+        if round(self.exposure) == FLICKER_FREE:
+            if p < 235:
+                return  # stay locked to the projector's colour cycle unless the table nearly saturates
+            ratio = 0.7
+        else:
+            ratio = self.target / max(p, 1.0)
+            if p >= 254:
+                ratio = 0.6  # saturated: the percentile says nothing, back off hard
+            if abs(ratio - 1) < 0.08:
+                return
         new = float(np.clip(self.exposure * np.clip(ratio, 0.6, 1.5), *EXPOSURE_RANGE))
         if new > FLICKER_FREE * 0.75:  # dim enough: lock to the projector's colour cycle
             new = FLICKER_FREE
