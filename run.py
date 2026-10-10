@@ -17,7 +17,7 @@ from pmd.tracker import Tracker
 def main():
     duration = float(sys.argv[1]) if len(sys.argv) > 1 else float("inf")
     calib = Calibration.load(CALIB_PATH)
-    tracker = Tracker(CALIB_PATH)
+    tracker = Tracker(CALIB_PATH, predict=0.05)
     proj = Projector()
     game = Game(proj, tracker, calib)
     t0 = time.monotonic()

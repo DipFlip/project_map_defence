@@ -230,6 +230,7 @@ class _Core:
         self._claimed = 0
         self._full_running = False
         self._last_full = 0.0
+        self._missed = False  # a known tag fell out of its crop: rescan the whole table
         self.table_box = self._table_box()
         self._running = True
         self._threads = [threading.Thread(target=self._loop, daemon=True) for _ in range(workers)]
@@ -289,12 +290,19 @@ class _Core:
                 continue
             with self._cond:
                 known = list(self._tags.values())
-                full = not known or (not self._full_running and stamp - self._last_full > self.full_scan_every)
+                due = self._missed or stamp - self._last_full > self.full_scan_every
+                full = not known or (not self._full_running and due)
                 if full:
                     self._full_running = True
                     self._last_full = stamp
+                    self._missed = False
             try:
                 found = self._detect_full(detector, frame) if full else self._detect_roi(detector, frame, known, stamp)
+                if not full:
+                    # tags seen in the previous frame but not in their crop moved too fast for it
+                    got = {t.id for t in found}
+                    if any(t.id not in got and stamp - t.last_seen < 0.07 for t in known):
+                        self._missed = True
             finally:
                 if full:
                     self._full_running = False
@@ -307,7 +315,10 @@ class _Core:
         for t in known:
             c = t.cam_corners + t.cam_vel * (stamp - t.last_seen)
             side = float(np.linalg.norm(c[1] - c[0]))
-            margin = side + np.linalg.norm(t.cam_vel) * 0.04  # one frame of motion
+            # search window: the crop around where we expect the tag. A piece moved
+            # at 1.5 m/s travels ~50 camera px between frames, so besides a fixed
+            # border we add 1.5 frames of motion at its current speed.
+            margin = max(1.5 * side, 40) + np.linalg.norm(t.cam_vel) * 0.05
             x0, y0 = np.maximum(c.min(axis=0) - margin, 0).astype(int)
             x1, y1 = np.minimum(c.max(axis=0) + margin, (w, h)).astype(int)
             if x1 - x0 > 8 and y1 - y0 > 8:

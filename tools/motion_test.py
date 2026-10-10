@@ -29,7 +29,7 @@ TAG_PX = 60
 
 def main(speeds):
     calib = Calibration.load(CALIB_PATH)
-    tracker = Tracker(CALIB_PATH)
+    tracker = Tracker(CALIB_PATH, predict=0.05)
     proj = Projector()
     poly = np.array(calib.table_poly)
     center = poly.mean(axis=0)
