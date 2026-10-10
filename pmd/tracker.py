@@ -163,6 +163,10 @@ class Tracker:
         """Ask the tracking process to save the current camera frame."""
         self._conn.send(("snapshot", (path, annotate)))
 
+    def record(self, directory):
+        """Save every raw camera frame to directory (None stops). For building datasets."""
+        self._conn.send(("record", directory))
+
     def close(self):
         try:
             self._conn.send(("close", None))
@@ -206,10 +210,15 @@ def _child_main(conn, calib_path, exposure, core_args):
                     return
                 if kind == "snapshot":
                     core.snapshot(*arg)
+                elif kind == "record":
+                    cam.stop_recording()
+                    if arg:
+                        cam.start_recording(arg)
     except (EOFError, BrokenPipeError):
         pass
     finally:
         core.close()
+        cam.stop_recording()
         cam.auto_exposure()
         cam.close()
 

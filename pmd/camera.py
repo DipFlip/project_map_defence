@@ -40,6 +40,7 @@ class Camera:
         self._cond = threading.Condition()
         self._frame = None
         self._raw = None
+        self._record = None  # (directory, open stamps file) while recording raw frames
         self._stamp = 0.0
         self._count = 0
         self._running = True
@@ -53,8 +54,15 @@ class Camera:
             if frame is None:
                 time.sleep(0.01)
                 continue
+            stamp = time.monotonic()
+            rec = self._record
+            if rec is not None:  # raw JPEG exactly as the camera sent it, plus its timestamp
+                name = f"{self._count:06d}.jpg"
+                with open(os.path.join(rec[0], name), "wb") as f:
+                    f.write(raw.tobytes())
+                rec[1].write(f"{name},{stamp:.6f}\n")
             with self._cond:
-                self._frame, self._raw, self._stamp = frame, raw, time.monotonic()
+                self._frame, self._raw, self._stamp = frame, raw, stamp
                 self._count += 1
                 self._cond.notify_all()
 
@@ -62,6 +70,16 @@ class Camera:
         """(frame, timestamp, sequence number) of the newest frame, frame may be None."""
         with self._cond:
             return self._frame, self._stamp, self._count
+
+    def start_recording(self, directory):
+        """Save every following raw frame to directory (NNNNNN.jpg + stamps.csv)."""
+        os.makedirs(directory, exist_ok=True)
+        self._record = (directory, open(os.path.join(directory, "stamps.csv"), "a"))
+
+    def stop_recording(self):
+        rec, self._record = self._record, None
+        if rec is not None:
+            rec[1].close()
 
     def latest_color(self):
         with self._cond:
