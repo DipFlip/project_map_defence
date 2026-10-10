@@ -7,8 +7,9 @@ Latency matters more than anything here, so:
   expected position, packing the crops into one mosaic image and running the
   detector once on that (~2 ms instead of ~25 ms for the full frame);
 - a full-frame scan still runs a few times a second to pick up new tags;
-- positions are extrapolated along each tag's velocity to hide the
-  camera + processing + projector delay (~150 ms in total on this rig).
+- positions are smoothed with a One Euro filter (strong at rest, light when
+  moving); optional extrapolation along velocity can hide some of the
+  camera + projector delay, but amplifies jitter, so it is off by default.
 """
 import multiprocessing as mp
 import sys
@@ -19,6 +20,7 @@ from dataclasses import dataclass, replace
 import cv2
 import numpy as np
 
+from .filters import OneEuro
 from .tags import TagDetector
 
 # physical size of the black square per tag id, for estimating mm <-> px
@@ -34,8 +36,12 @@ class TrackedTag:
     corners: np.ndarray  # 4x2 projector px
     cam_corners: np.ndarray  # 4x2 camera px
     last_seen: float  # capture time (time.monotonic) of the frame it was last seen in
-    vel: np.ndarray = None  # projector px / s
+    vel: np.ndarray = None  # projector px / s (filtered)
     cam_vel: np.ndarray = None  # camera px / s
+
+    @property
+    def raw_cam_center(self):
+        return self.cam_corners.mean(axis=0)
 
     @property
     def forward(self):
@@ -47,10 +53,11 @@ class Tracker:
 
     predict: extra seconds of extrapolation on top of the frame's age,
     covering camera exposure/transfer and projector lag. Other keyword
-    arguments go to the tracking core (hold, jitter_px, full_scan_every).
+    arguments go to the tracking core (hold, full_scan_every, pos_filter,
+    angle_filter).
     """
 
-    def __init__(self, calib_path, exposure=None, predict=0.10, **core_args):
+    def __init__(self, calib_path, exposure=None, predict=0.0, **core_args):
         self.predict = predict
         self.fps = 0.0
         self.age_ms = {"roi": 0.0, "full": 0.0}
@@ -72,7 +79,7 @@ class Tracker:
     def tags(self, predict=True):
         """Dict id -> TrackedTag of present tags, positions extrapolated to now."""
         self._drain()
-        if not predict:
+        if not predict or not self.predict:
             return dict(self._tags)
         now = time.monotonic()
         out = {}
@@ -201,12 +208,18 @@ class _Core:
     """Detection workers inside the tracking process.
 
     hold: seconds a tag stays alive after it was last seen (hides brief
-    occlusions by hands). Small movements are smoothed to remove jitter.
+    occlusions by hands). Positions and angles go through One Euro filters:
+    heavy smoothing at rest, little when moving fast.
     """
 
-    def __init__(self, camera, calib, hold=0.4, workers=2, jitter_px=3.0, full_scan_every=0.2):
+    def __init__(self, camera, calib, hold=0.4, workers=2, full_scan_every=0.2,
+                 pos_filter=None, angle_filter=None):
         self.camera, self.calib = camera, calib
-        self.hold, self.jitter_px, self.full_scan_every = hold, jitter_px, full_scan_every
+        self.hold, self.full_scan_every = hold, full_scan_every
+        # One Euro settings; position in projector px, angle in radians
+        self.pos_filter = pos_filter or dict(min_cutoff=1.0, beta=0.04, d_cutoff=2.0)
+        self.angle_filter = angle_filter or dict(min_cutoff=1.0, beta=0.5, d_cutoff=2.0)
+        self._filters = {}
         self.fps = 0.0  # frames processed per second
         self.age_ms = {"roi": 0.0, "full": 0.0}  # frame capture -> pose available
         self._n_frames, self._fps_t0 = 0, time.monotonic()
@@ -331,17 +344,21 @@ class _Core:
                 up = corners[0] - corners[3]  # printed top-left minus bottom-left
                 angle = float(np.arctan2(up[1], up[0]))
                 size = float(np.mean(np.linalg.norm(corners - np.roll(corners, 1, 0), axis=1)))
-                vel, cam_vel = np.zeros(2), np.zeros(2)
-                if old is not None:
-                    dt = stamp - old.last_seen
-                    if dt < 0.25:
-                        a = 0.6
-                        vel = a * (pos - old.pos) / dt + (1 - a) * old.vel
-                        cam_vel = a * (tag.center - old.cam_corners.mean(axis=0)) / dt + (1 - a) * old.cam_vel
-                    if np.linalg.norm(old.pos - pos) < self.jitter_px:
-                        pos = 0.6 * old.pos + 0.4 * pos
-                        da = (angle - old.angle + np.pi) % (2 * np.pi) - np.pi
-                        angle = old.angle + 0.4 * da
+                cam_vel = np.zeros(2)
+                dt = stamp - old.last_seen if old is not None else 0.0
+                if old is None or dt > 0.25:  # new or reappeared: start the filters fresh
+                    self._filters[tag.id] = [OneEuro(**self.pos_filter), OneEuro(**self.angle_filter)]
+                    dt = 0.0
+                else:
+                    # raw camera-space velocity, only used to place the ROI crop
+                    cam_vel = 0.6 * (tag.center - old.raw_cam_center) / dt + 0.4 * old.cam_vel
+                    angle = old.angle + (angle - old.angle + np.pi) % (2 * np.pi) - np.pi  # unwrap
+                f_pos, f_angle = self._filters[tag.id]
+                raw_pos = pos
+                pos = f_pos(raw_pos, dt).copy()
+                angle = float(f_angle(angle, dt))
+                vel = f_pos.dx.copy()
+                corners = corners + (pos - raw_pos)
                 self._tags[tag.id] = TrackedTag(tag.id, pos, angle, size, corners, tag.corners, stamp, vel, cam_vel)
             for k in [k for k, t in self._tags.items() if now - t.last_seen > self.hold]:
                 del self._tags[k]
