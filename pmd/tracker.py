@@ -236,10 +236,14 @@ def _child_main(conn, calib_path, exposure, core_args):
         cam.close()
 
 
-# camera exposure limits (0.1 ms units). Shorter than ~1 ms catches only part of the
-# projector's colour cycle (striped image, tags detected 8x/s instead of 30x/s
-# under bright projection); the upper limit keeps motion blur of moving wands small.
-EXPOSURE_RANGE = (12, 60)
+# camera exposure (0.1 ms units). The projector shows red, green and blue in turn,
+# 120 times a second: an exposure of exactly 1/120 s sees whole cycles, so its
+# light looks steady (measured colour flicker 3.6 at 8.3 ms vs 45-160 at 2-7 ms;
+# blue button spots stay readable even when lit by the projector). Auto exposure
+# keeps FLICKER_FREE whenever the room is dim enough, and only goes shorter
+# (EXPOSURE_RANGE) when the table would be too bright at it, e.g. in daylight.
+FLICKER_FREE = 83
+EXPOSURE_RANGE = (12, FLICKER_FREE)
 
 
 class _AutoExposure:
@@ -271,6 +275,8 @@ class _AutoExposure:
         if abs(ratio - 1) < 0.08:
             return
         new = float(np.clip(self.exposure * np.clip(ratio, 0.6, 1.5), *EXPOSURE_RANGE))
+        if new > FLICKER_FREE * 0.75:  # dim enough: lock to the projector's colour cycle
+            new = FLICKER_FREE
         if round(new) != round(self.exposure):
             self.exposure = new
             self.cam.manual_exposure(round(new))

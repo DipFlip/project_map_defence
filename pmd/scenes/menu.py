@@ -61,7 +61,7 @@ class Menu:
                 (170, 170, 170), self.facing)
         for name, tile in zip(self.choices, self.tiles):
             hover = any(tile.collidepoint(w.pos) for w in wands)
-            pygame.draw.rect(s, (70, 70, 70), tile, border_radius=16)
+            pygame.draw.rect(s, (60, 60, 60), tile, border_radius=16)
             pygame.draw.rect(s, (255, 220, 120) if hover else (140, 140, 140), tile, 6 if hover else 3, border_radius=16)
             ui.text(s, self.title_fonts[name], self.app.games[name].title, tile.center + self.up * tile.height * 0.32,
                     (255, 220, 120) if hover else (200, 200, 220), self.facing)
