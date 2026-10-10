@@ -18,7 +18,8 @@ from ..projector import pygame
 from ..tracker import WAND_IDS
 
 SLIDE_DIR = os.path.join(ROOT, "slides")
-DIM = 0.75  # slides are shown a bit dimmed: lots of bright white makes the camera shorten its exposure
+DIM = 0.55  # slides are dimmed: bright white pushes the camera off its flicker-free exposure (false presses)
+HOLD_S = 0.25  # a wand has to stay pressed this long to advance (a flicker doesn't)
 
 
 def _surface(bgr):
@@ -52,18 +53,25 @@ class Slides:
         self._next_frame_request = 0.0
         self.warp_imgs = None
         self.changed = time.monotonic()
+        self.pending = {}  # wand id -> when its press started
 
     # --- navigation ------------------------------------------------------
     def update(self, dt, now, tags, presses):
-        if presses and now - self.changed > 0.4:
-            k = next(iter(presses))
-            self.app.fx.burst(tags[k].pos, (255, 255, 255), n=14, speed=200, life=0.35)
-            self.app.sound.play("click")
-            self.page += 1
-            self.changed = now
-            if self.page >= len(self.pages):
-                self.app.switch("menu")
-                return
+        for k in presses:
+            self.pending.setdefault(k, now)
+        for k, t0 in list(self.pending.items()):  # advance only on a press that is held
+            if k not in tags or not tags[k].pressed:
+                del self.pending[k]
+            elif now - t0 >= HOLD_S and now - self.changed > 0.8:
+                self.pending.clear()
+                self.app.fx.burst(tags[k].pos, (255, 255, 255), n=14, speed=200, life=0.35)
+                self.app.sound.play("click")
+                self.page += 1
+                self.changed = now
+                if self.page >= len(self.pages):
+                    self.app.switch("menu")
+                    return
+                break
         if self.pages[self.page] == self._camera and now >= self._next_frame_request:
             self.app.tracker.request_frame()
             self._next_frame_request = now + 0.3
@@ -168,6 +176,9 @@ class Slides:
         a = self.area()
         pygame.draw.rect(s, (40, 40, 40), a, border_radius=int(6 * self.mm))
         self.pages[self.page](s, now, a)
+        for k in WAND_IDS:  # keep slide content off the wands' tags and button spots
+            if k in self.app.tags:
+                ui.quiet_wand(s, self.app.tags[k])
         down = np.array([0.0, -1.0]) if self.app.facing == "top" else np.array([0.0, 1.0])
         ui.text(s, self.small, f"{self.page + 1} / {len(self.pages)}   press any wand for the next slide",
                 np.array(self.app.field.center) + down * (self.app.field.height / 2 - 6 * self.mm),
