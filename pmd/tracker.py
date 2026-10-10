@@ -32,8 +32,10 @@ BUTTON_OFFSET = 2.9
 BUTTON_SEARCH = 0.9  # +- tag heights searched around the expected spot
 # a pixel is "red" (after white-balancing against the table in the same box) when
 # red - max(green, blue) exceeds RED_MIN and green < GREEN_PER_RED * red.
-# Measured: spots g/r ~0.3, brown stick ~0.85, white table ~1; skin is typically 0.6-0.8.
-RED_MIN, GREEN_PER_RED = 0.3, 0.5
+# Measured: spots g/r ~0.3 (r - max(g,b) >= 0.32 even on the darkest spot),
+# brown stick ~0.85, white table ~1; skin is typically 0.6-0.8.
+RED_MIN, GREEN_PER_RED = 0.2, 0.5
+BUTTON_MIN_LEVEL = 0.15  # visible level never learned below this (a wand that starts covered)
 # Thresholds as a fraction of each wand's own learned "visible" level (wands differ:
 # 0.9 to 1.8 when visible), with hysteresis. Covered reads ~0.
 PRESS_BELOW, RELEASE_ABOVE = 0.4, 0.6
@@ -444,11 +446,18 @@ class _Core:
             self._cond.notify_all()
 
     def _debounce(self, tag_id, value, frames=2):
-        """Pressed state from button values, relative to this wand's learned visible level."""
-        pressed, count, level = self._button_state.get(tag_id, (False, 0, 1.0))
+        """Pressed state from button values, relative to this wand's learned visible level.
+
+        The level follows the wand's highest recent readings: it jumps up to new
+        highs quickly and sinks slowly, whether or not the button is pressed, so a
+        wand that starts covered (or a level that's off) corrects itself.
+        """
+        pressed, count, level = self._button_state.get(tag_id, (False, 0, None))
         if value is not None:
-            if not pressed and value > 0.6 * level:
-                level += 0.05 * (value - level)  # slowly track how bright this spot is when visible
+            if level is None:
+                level = value
+            rate = 0.3 if value > level else 0.003
+            level = max(BUTTON_MIN_LEVEL, level + rate * (value - level))
             flip = value < PRESS_BELOW * level if not pressed else value > RELEASE_ABOVE * level
             count = count + 1 if flip else 0
             if count >= frames:
