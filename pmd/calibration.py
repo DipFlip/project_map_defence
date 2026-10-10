@@ -260,8 +260,10 @@ def table_frame(cam, proj, calib, log=print, debug_dir=None):
     px_per_mm = np.median([np.linalg.norm(c[1] - c[0]) / mm for c, mm in tags]) if tags else 1.7
     Hm, rms = fit_metric(tags, px_per_mm)
     log(f"table frame: tags square to {rms:.2f} mm rms")
-    w = capture(cam, proj, np.full((H, W), 255, np.uint8), settle=0.5)
-    b = capture(cam, proj, np.zeros((H, W), np.uint8), settle=0.5)
+    # more frames average out the projector's flicker stripes (a longer exposure
+    # would saturate the white table even with the projector off)
+    w = capture(cam, proj, np.full((H, W), 255, np.uint8), settle=0.6, n=8)
+    b = capture(cam, proj, np.zeros((H, W), np.uint8), settle=0.6, n=8)
     proj.fill((0, 0, 0))
     outline = lit_outline(np.clip(w - b, 0, 255), calib.cam_to_proj)
     if outline is None:

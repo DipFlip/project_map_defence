@@ -87,16 +87,18 @@ def align_to_outline(H, outline_proj):
     return T @ R @ H, (float(L), float(S))
 
 
-def lit_outline(lit, cam_to_proj, min_frac=0.35):
+def lit_outline(lit, cam_to_proj, frac=0.5):
     """Outline (projector px) of the table plane from a white-minus-black capture.
 
-    The table is the biggest bright region; anything further away (floor) or
-    unlit is dim. Returns a polygon in projector px, or None.
+    The table is the biggest bright region; the floor further away is far
+    dimmer. The projector's flicker leaves dark horizontal stripes at short
+    exposures, so the mask is closed over small gaps and the hull is taken.
+    Returns a polygon in projector px, or None.
     """
-    lit = cv2.GaussianBlur(lit.astype(np.float32), (9, 9), 0)
-    thr = min_frac * np.percentile(lit, 99)
-    mask = (lit > thr).astype(np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((15, 15), np.uint8))
+    b = cv2.GaussianBlur(lit.astype(np.float32), (31, 31), 0)
+    mask = (b > frac * np.percentile(b, 90)).astype(np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((25, 25), np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((25, 25), np.uint8))
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
     if n < 2:
         return None
