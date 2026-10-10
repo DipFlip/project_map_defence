@@ -1,7 +1,7 @@
 """Pin shooter: knock down the opponent's line of 10 pins with bowling balls.
 
 Players stand at the short ends. Each wand holds one ball; cover the wand's
-white patch to fire it straight ahead (the tag's printed top). Wands block
+red spot to fire it straight ahead (the tag's printed top). Wands block
 balls coming at you: an empty wand catches the ball (now it's yours), a
 loaded one deflects it. Balls that get past your pin line roll into your
 ball return (on the wall to your right, halfway to the centre); hold an empty
