@@ -1,8 +1,10 @@
 """Pong for two players at the short ends of the table.
 
-Each player's bouncer is the line between their two wands. Holding the wands
-closer together makes a shorter bouncer that sends the ball back faster; its
-angle steers the ball.
+Each player's bouncer lies between their two wands (centred on their midpoint,
+at most 70% of the court's width). The ball bounces off it like off a moving
+wall: pushing the bouncer into the ball sends it back faster, sweeping it
+sideways adds spin-like sideways speed, and its angle steers the ball. Fast
+balls slowly relax back to a cruising speed.
 """
 import math
 import random
@@ -17,10 +19,13 @@ from .players import make_players
 
 WIN_SCORE = 7
 BALL_MM = 14
-BASE_SPEED_MM = 550  # ball speed off a bouncer of REF_LEN_MM
-REF_LEN_MM = 150
-SPEED_RANGE = (0.6, 2.5)  # speed multiplier limits from bouncer length
-MAX_ANGLE = math.radians(60)  # steepest return angle off the long axis
+CRUISE_MM = 320  # mm/s the ball relaxes back to
+MIN_MM, MAX_MM = 200, 1500  # ball speed limits
+RELAX_S = 2.5  # time constant for a fast ball to slow back to cruising speed
+RESTITUTION = 0.85  # how much of the push along the bouncer's normal comes back
+GRIP = 0.35  # share of the bouncer's sideways motion (relative to the ball) passed to the ball
+MIN_FORWARD = 0.35  # after a hit the ball heads to the opponent at least this fast (x cruise)
+MAX_PADDLE = 0.7  # bouncer length limit, fraction of the court's width
 PADDLE_HALF_THICK = 6
 
 
@@ -52,8 +57,17 @@ class Pong:
         self.flash = None
 
     def paddle(self, tags, i):
+        """(end a, end b, velocity) of player i's bouncer, or None without both wands."""
         w = self.players[i].wands(tags)
-        return (w[0].pos.copy(), w[1].pos.copy()) if len(w) == 2 else None
+        if len(w) != 2:
+            return None
+        a, b = w[0].pos, w[1].pos
+        mid, d = (a + b) / 2, b - a
+        length = np.linalg.norm(d)
+        half = min(length / 2, MAX_PADDLE * self.field.height / 2)
+        d = d / max(length, 1e-6)
+        vel = (w[0].vel + w[1].vel) / 2
+        return mid - d * half, mid + d * half, vel
 
     # --- rules ---------------------------------------------------------
     def serve(self):
@@ -61,21 +75,25 @@ class Pong:
         ang = random.uniform(-0.45, 0.45)
         d = np.array([-p.dir * math.cos(ang), math.sin(ang)])  # towards the player who conceded
         self.ball = np.array(self.field.center, float)
-        self.vel = d * BASE_SPEED_MM * self.mm * 0.8
+        self.vel = d * CRUISE_MM * self.mm * 0.9
         self.rally = 0
         self.trail.clear()
 
-    def bounce(self, i, a, b, normal, now):
+    def bounce(self, i, normal, paddle_vel, now):
+        """Collision with a moving wall: reflect the velocity relative to the bouncer."""
         p = self.players[i]
-        length = np.linalg.norm(b - a) / self.mm
-        mult = np.clip(REF_LEN_MM / max(length, 1), *SPEED_RANGE) * (1 + 0.03 * self.rally)
-        v = self.vel - 2 * np.dot(self.vel, normal) * normal
-        # head towards the opponent, within MAX_ANGLE of the long axis
-        ang = math.atan2(v[1], v[0] * p.dir)
-        if abs(ang) > math.pi / 2:
-            ang = math.copysign(math.pi, ang) - ang
-        ang = float(np.clip(ang, -MAX_ANGLE, MAX_ANGLE))
-        self.vel = np.array([p.dir * math.cos(ang), math.sin(ang)]) * BASE_SPEED_MM * self.mm * mult
+        rel = self.vel - paddle_vel
+        vn = np.dot(rel, normal)
+        if vn >= 0:
+            return
+        tangent = rel - vn * normal
+        v = self.vel - (1 + RESTITUTION) * vn * normal - GRIP * tangent
+        fwd = np.array([p.dir, 0.0])
+        min_fwd = MIN_FORWARD * CRUISE_MM * self.mm
+        if np.dot(v, fwd) < min_fwd:  # never back into your own goal
+            v = v + (min_fwd - np.dot(v, fwd)) * fwd
+        speed = np.linalg.norm(v)
+        self.vel = v * np.clip(speed, MIN_MM * self.mm, MAX_MM * self.mm) / max(speed, 1e-6)
         self.rally += 1
         self.flash = (i, now)
 
@@ -91,6 +109,10 @@ class Pong:
             self.prev_paddles = paddles
             return
         f = self.field
+        speed = np.linalg.norm(self.vel)
+        cruise = CRUISE_MM * self.mm
+        if speed > cruise:  # fast balls relax back to cruising speed
+            self.vel *= (cruise + (speed - cruise) * math.exp(-dt / RELAX_S)) / speed
         prev = self.ball.copy()
         steps = max(1, math.ceil(np.linalg.norm(self.vel) * dt / (self.r * 0.5)))
         for _ in range(steps):
@@ -107,11 +129,10 @@ class Pong:
                 continue
             s0, s1 = self._side(prev, old), self._side(self.ball, pad)
             if s0 * s1 < 0 and self._within(self.ball, pad):
-                a, b = pad
+                a, b, u = pad
                 n = _perp((b - a) / np.linalg.norm(b - a)) * np.sign(s0)
                 self.ball = self._closest(self.ball, a, b) + n * (self.r + PADDLE_HALF_THICK + 1)
-                if np.dot(self.vel, n) < 0:
-                    self.bounce(i, a, b, n, now)
+                self.bounce(i, n, u, now)
         self.prev_paddles = paddles
         self.trail.append(self.ball.copy())
         if self.ball[0] < f.left - self.r or self.ball[0] > f.right + self.r:
@@ -130,29 +151,29 @@ class Pong:
 
     @staticmethod
     def _side(p, pad):
-        a, b = pad
+        a, b = pad[:2]
         t = (b - a) / max(np.linalg.norm(b - a), 1e-6)
         return float(np.dot(p - a, _perp(t)))
 
     def _within(self, p, pad):
-        a, b = pad
+        a, b = pad[:2]
         ab = b - a
         L = max(np.linalg.norm(ab), 1e-6)
         u = np.dot(p - a, ab) / L
         return -self.r <= u <= L + self.r
 
     def _touch(self, i, pad, now):
-        a, b = pad
+        a, b, u = pad
         cp = self._closest(self.ball, a, b)
         d = self.ball - cp
         dist = np.linalg.norm(d)
         if dist >= self.r + PADDLE_HALF_THICK or dist < 1e-6:
             return False
         n = d / dist
-        if np.dot(self.vel, n) >= 0:
-            return False  # already moving away
+        if np.dot(self.vel - u, n) >= 0:
+            return False  # already moving away from the bouncer
         self.ball = cp + n * (self.r + PADDLE_HALF_THICK + 1)
-        self.bounce(i, a, b, n, now)
+        self.bounce(i, n, u, now)
         return True
 
     # --- drawing ---------------------------------------------------------
@@ -167,12 +188,10 @@ class Pong:
             ui.text(s, self.font, str(self.score[i]), (x, f.centery), tuple(c // 2 for c in p.color), p.facing)
             pad = self.paddle(self.app.tags, i)
             if pad is not None:
-                a, b = pad
-                length = np.linalg.norm(b - a) / self.mm
-                mult = np.clip(REF_LEN_MM / max(length, 1), *SPEED_RANGE)
+                a, b, _ = pad
                 lit = self.flash and self.flash[0] == i and now - self.flash[1] < 0.15
                 color = (255, 255, 255) if lit else p.color
-                pygame.draw.line(s, color, a, b, int(PADDLE_HALF_THICK * 2 + 4 * (mult - 0.6)))
+                pygame.draw.line(s, color, a, b, PADDLE_HALF_THICK * 2)
         if self.ball is not None:
             for j, q in enumerate(self.trail):
                 pygame.draw.circle(s, (60 + 12 * j,) * 3, q, self.r * (0.3 + 0.05 * j))

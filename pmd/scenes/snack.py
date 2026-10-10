@@ -1,13 +1,14 @@
 """Snack castle: mice vs. the snacks, a tower defence played with tags on the table.
 
-Everything is in projector pixels. The playfield is a grid whose cell is one
-field-tag spacing (40 mm), sized from the tags' known physical size.
+Everything is in table-canvas pixels. The playfield is a grid whose cell is
+one field-tag spacing (40 mm).
 
-Pieces (tag ids from the ar-of-empires print kit, A-J = 10-19):
-  10            coin collector: walk it over coins, bring them to the chest
-  16            chest: holds coins; park an attacker next to it to upgrade it
-  12, 14, 19    cats: swipe every mouse around them
-  other 11-18   slingshots: shoot straight ahead in a narrow cone
+Pieces (tag ids from the ar-of-empires print kit, A-J = 10-19; the wands are
+G, B, D, C = 16, 11, 13, 12):
+  11 (wand B)       coin collector: move it over coins, bring them to the chest
+  16 (wand G)       chest: holds coins; park an attacker next to it to upgrade it
+  14, 19            cats: swipe every mouse around them
+  12, 13 (wands) and the other tags: slingshots, shoot straight ahead in a narrow cone
 """
 import math
 import time
@@ -19,9 +20,9 @@ from .. import art, ui
 from ..projector import pygame
 
 GRID_MM = 40.0
-COLLECTOR_IDS = {10}
+COLLECTOR_IDS = {11}
 CHEST_IDS = {16}
-CAT_IDS = {12, 14, 19}
+CAT_IDS = {14, 19}
 SLINGSHOT_IDS = set(range(10, 20)) - COLLECTOR_IDS - CHEST_IDS - CAT_IDS
 ATTACKER_IDS = CAT_IDS | SLINGSHOT_IDS
 
@@ -37,7 +38,7 @@ def upgrade_cost(level):
 
 def slingshot_stats(level):
     """(damage, cooldown s, range in cells, half-angle rad)."""
-    return 1 + level, 0.6 * 0.85 ** level, 1.0 + 0.25 * level, math.radians(7.5 + 1.5 * level)
+    return 1 + level, 0.6 * 0.85 ** level, 2.0 + 0.5 * level, math.radians(7.5 + 1.5 * level)
 
 
 def cat_stats(level):

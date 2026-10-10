@@ -46,12 +46,14 @@ The games start at a menu: hold a wand over a game and press. Taking all four wa
 off the table for 3 s goes back to the menu. Players: G+B is one pair, D+C the other.
 
 ## Pong
-Players at the short ends. Your bouncer is the line between your two wands: hold them
-closer for a faster return, tilt to aim. First to 7.
+Players at the short ends. Your bouncer lies between your two wands (centred on them,
+at most 70% of the court width). The ball bounces off it like off a moving wall: push
+into the ball to hit it harder, sweep sideways to send it at an angle, tilt to aim.
+Fast balls relax back to a calm cruising speed. First to 7.
 
 ## Pin shooter
-Ten pins in a line at each end. Each wand holds one ball; press to fire it straight
-ahead (the tag's printed top). An empty wand catches an incoming ball, a loaded one
+Ten pins in a line at each end. Each wand holds one ball; press to fire it wherever
+the wand points (the tag's printed top). An empty wand catches an incoming ball, a loaded one
 deflects it. Balls past your pin line roll into your ball return (corner on your
 right, halfway to the centre); hold an empty wand there to pick one up. Knock down all ten to win.
 
@@ -70,9 +72,9 @@ Lose all 20 snacks and a new game starts after 8 s. Mice get stronger every 30 s
 
 | Tag | Piece | What it does |
 |---|---|---|
-| A (10) | coin collector | slide over coins dropped by caught mice, bring them to the chest |
-| G (16) | chest | stores coins; park an attacker next to it for 1.5 s to upgrade (5, 10, 15, 20 coins) |
-| C, E, J (12, 14, 19) | cat | swipes all mice around it, slow |
-| B, D, F, H, I (11, 13, 15, 17, 18) | slingshot | shoots towards the tag's printed top (label text upright), 15° cone, one grid cell reach |
+| B (11, wand) | coin collector | move over coins dropped by caught mice, bring them to the chest |
+| G (16, wand) | chest | stores coins; park an attacker next to it for 1.5 s to upgrade (5, 10, 15, 20 coins) |
+| E, J (14, 19) | cat | swipes all mice around it, slow |
+| D, C (13, 12, wands) and A, F, H, I (10, 15, 17, 18) | slingshot | shoots towards the tag's printed top, 15° cone, two grid cells reach |
 
 One grid cell is 40 mm, the spacing of the field-tag sheet.

@@ -16,13 +16,21 @@ class Menu:
         self.app, self.field = app, app.field
         f = self.field
         self.choices = list(app.games)
-        n = len(self.choices)
-        pad = f.width * 0.03
-        w = (f.width - pad * (n + 1)) / n
-        h = f.height * 0.6
-        self.tiles = [pygame.Rect(f.left + pad + i * (w + pad), f.centery - h / 2, w, h) for i in range(n)]
-        self.font = pygame.font.SysFont(None, int(f.height * 0.09))
-        self.small = pygame.font.SysFont(None, int(f.height * 0.05))
+        # 2 x 2 grid in the middle of the table
+        gap = f.height * 0.04
+        th = (f.height * 0.78 - gap) / 2
+        tw = min((f.width * 0.8 - gap) / 2, th * 1.6)
+        x0, y0 = f.centerx - tw - gap / 2, f.centery - th - gap / 2
+        self.tiles = [pygame.Rect(int(x0 + (i % 2) * (tw + gap)), int(y0 + (i // 2) * (th + gap)), int(tw), int(th))
+                      for i in range(len(self.choices))]
+        self.small = pygame.font.SysFont(None, int(f.height * 0.045))
+        # each title in the largest font that fits inside its tile
+        self.title_fonts = {}
+        for name, tile in zip(self.choices, self.tiles):
+            size = int(tile.height * 0.22)
+            while size > 10 and pygame.font.SysFont(None, size).size(app.games[name].title)[0] > tile.width * 0.88:
+                size -= 2
+            self.title_fonts[name] = pygame.font.SysFont(None, size)
         self.facing = app.facing
         self.clicks = []  # (wand position, button position, time, colour): feedback for every press
         self.up = np.array([0.0, 1.0]) if self.facing == "top" else np.array([0.0, -1.0])
@@ -43,13 +51,13 @@ class Menu:
         f = self.field
         tags = self.app.tags
         wands = [tags[k] for k in WAND_IDS if k in tags]
-        ui.text(s, self.small, "hold a wand over a game and cover its blue spot", f.center + self.up * f.height * 0.4,
+        ui.text(s, self.small, "hold a wand over a game and cover its blue spot", f.center + self.up * f.height * 0.45,
                 (170, 170, 170), self.facing)
         for name, tile in zip(self.choices, self.tiles):
             hover = any(tile.collidepoint(w.pos) for w in wands)
             pygame.draw.rect(s, (70, 70, 70), tile, border_radius=16)
             pygame.draw.rect(s, (255, 220, 120) if hover else (140, 140, 140), tile, 6 if hover else 3, border_radius=16)
-            ui.text(s, self.font, self.app.games[name].title, tile.center + self.up * tile.height * 0.32,
+            ui.text(s, self.title_fonts[name], self.app.games[name].title, tile.center + self.up * tile.height * 0.32,
                     (255, 220, 120) if hover else (200, 200, 220), self.facing)
             self._icon(s, name, tile, now)
         for w in wands:

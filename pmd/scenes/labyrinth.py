@@ -28,7 +28,8 @@ RESTITUTION = 0.35
 BALL_R = 8.0
 TILT_MM = 35.0  # corner height range around the middle, from the wands' full range
 EYE_MM = 500.0  # perspective eye height above the board (exaggerates depth)
-WALL_T, WALL_H = 6.0, 12.0
+HEIGHT_VIS = 3.0  # drawn height of things on the board vs. their simulated height
+WALL_T, WALL_H = 6.0, 7.0  # wall height is only drawn (x HEIGHT_VIS); walls always block
 LEDGE_H, LANDING_H = 12.0, 0.0
 RESTART_AFTER_S = 6.0
 
@@ -221,7 +222,8 @@ class Labyrinth:
     def project(self, pts, z_local, a, b, c):
         """Board mm points (N,2) at local heights z (scalar or N) -> canvas px, with perspective."""
         pts = np.asarray(pts, float).reshape(-1, 2)
-        zw = a * pts[:, 0] + b * pts[:, 1] + c + np.broadcast_to(z_local, len(pts))
+        # heights of things on the board (ledge, ramp, walls, ball) are drawn exaggerated
+        zw = a * pts[:, 0] + b * pts[:, 1] + c + np.broadcast_to(z_local, len(pts)) * HEIGHT_VIS
         s = EYE_MM / (EYE_MM - zw)
         return self.center + pts * s[:, None] * self.mm
 
@@ -253,10 +255,7 @@ class Labyrinth:
             pygame.draw.polygon(s, (12, 8, 5), self.project(ring, 0.0, a, b, c))
         self._quad(s, self.gap, 0.0, (12, 8, 5), a, b, c)
         # ramp, ledge (with front faces), landing
-        x0, y0, x1, y1 = self.ramp
-        pygame.draw.polygon(s, self._shade((185, 150, 95), a, b, 0, -LEDGE_H / (y1 - y0)),
-                            self.project([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], np.array([LEDGE_H, LEDGE_H, 0, 0]),
-                                         a, b, c))
+        self._draw_ramp(s, a, b, c, now)
         for r in self.ledge:
             rx0, ry0, rx1, ry1 = r
             for e0, e1 in (((rx0, ry1), (rx1, ry1)), ((rx0, ry0), (rx0, ry1))):  # visible-ish side faces
@@ -301,6 +300,29 @@ class Labyrinth:
                                BALL_R * self.mm * (1 + 4 * (now - self.flash[1])), 3)
         self._draw_players(s, zc)
         self._draw_status(s, now)
+
+    def _draw_ramp(self, s, a, b, c, now):
+        """The ramp: side face, a dark-to-light gradient up the slope, and moving uphill chevrons."""
+        x0, y0, x1, y1 = self.ramp  # rises from y1 (floor) to y0 (ledge)
+        # side face along the open (west) edge: a wedge from the floor up to the ledge
+        pygame.draw.polygon(s, (80, 55, 30), np.vstack([self.project([(x0, y1), (x0, y0)], np.array([0.0, LEDGE_H]), a, b, c),
+                                                         self.project([(x0, y0)], 0.0, a, b, c)]))
+        n = 10
+        for i in range(n):
+            ya, yb = y1 + (y0 - y1) * i / n, y1 + (y0 - y1) * (i + 1) / n
+            za, zb = LEDGE_H * i / n, LEDGE_H * (i + 1) / n
+            f = 0.55 + 0.45 * (i + 0.5) / n
+            color = self._shade(tuple(int(v * f) for v in (235, 185, 90)), a, b, 0, -LEDGE_H / (y1 - y0))
+            pygame.draw.polygon(s, color, self.project([(x0, ya), (x1, ya), (x1, yb), (x0, yb)], np.array([za, za, zb, zb]),
+                                                       a, b, c))
+        # chevrons pointing uphill, drifting up the slope
+        w = x1 - x0
+        for k in range(3):
+            t = ((now * 0.4 + k / 3) % 1.0)
+            y = y1 + (y0 - y1) * (0.15 + 0.7 * t)
+            z = LEDGE_H * (y1 - y) / (y1 - y0)
+            pts = [(x0 + w * 0.2, y + 10 * self.k), (x0 + w * 0.5, y - 6 * self.k), (x0 + w * 0.8, y + 10 * self.k)]
+            pygame.draw.lines(s, (90, 50, 20), False, self.project(pts, z, a, b, c), max(2, int(2.5 * self.mm)))
 
     def _draw_players(self, s, zc):
         """At each board corner: the controlling wand's height as a bar in its player colour."""

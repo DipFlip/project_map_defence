@@ -20,12 +20,15 @@ PINS = 10
 START_BALLS = 3
 BALL_MM, PIN_MM = 15, 10
 SPEED_MM = 700
-MAX_ANGLE = math.radians(65)  # steepest shot off the long axis
+MAX_ANGLE = math.radians(65)  # steepest deflection off the long axis (shots can go any way)
+
+
+BALL_LIFETIME_S = 8.0  # a ball still rolling after this long goes back to its shooter's return
 
 
 class Ball:
-    def __init__(self, pos, vel, color):
-        self.pos, self.vel, self.color = pos, vel, color
+    def __init__(self, pos, vel, color, owner, born):
+        self.pos, self.vel, self.color, self.owner, self.born = pos, vel, color, owner, born
 
 
 class PinShooter:
@@ -43,7 +46,7 @@ class PinShooter:
         f = self.field
         self.pin_x, self.pins, self.trays = [], [], []
         for p in self.players:
-            x = p.end_x + p.dir * f.width * 0.16  # pin line, measured from the player's end
+            x = p.end_x + p.dir * f.width * 0.21  # pin line, measured from the player's end
             ys = np.linspace(f.top + f.height * 0.1, f.bottom - f.height * 0.1, PINS)  # clear of the ball returns
             self.pin_x.append(x)
             self.pins.append([[np.array([x, y]), None] for y in ys])  # [pos, knocked down at]
@@ -68,7 +71,7 @@ class PinShooter:
         return next(i for i, p in enumerate(self.players) if wand_id in p.ids)
 
     def aim(self, direction, p):
-        """Clamp a direction to within MAX_ANGLE of p's shooting direction."""
+        """Clamp a direction to within MAX_ANGLE of p's shooting direction (used for deflections)."""
         ang = math.atan2(direction[1], direction[0] * p.dir)
         if abs(ang) > math.pi / 2:
             ang = math.copysign(math.pi, ang) - ang
@@ -90,8 +93,8 @@ class PinShooter:
                     self.loaded[w.id] = True
                     self.effects.append(("load", w.pos.copy(), now, p.color))
                 elif loaded and w.id in presses:
-                    d = self.aim(w.forward, p)
-                    self.balls.append(Ball(w.pos + d * (w.size + self.r + 4), d * SPEED_MM * self.mm, p.color))
+                    d = w.forward  # any direction the wand points
+                    self.balls.append(Ball(w.pos + d * (w.size + self.r + 4), d * SPEED_MM * self.mm, p.color, i, now))
                     self.loaded[w.id] = False
                     self.load_ready[w.id] = now + 0.6  # don't instantly reload when firing from the tray
         self._move_balls(dt, now, tags)
@@ -102,6 +105,10 @@ class PinShooter:
     def _move_balls(self, dt, now, tags):
         f = self.field
         for b in list(self.balls):
+            if now - b.born > BALL_LIFETIME_S:  # e.g. fired straight across, bouncing between the side walls
+                self.balls.remove(b)
+                self.tray_balls[b.owner] += 1
+                continue
             steps = max(1, math.ceil(np.linalg.norm(b.vel) * dt / (self.r * 0.5)))
             for _ in range(steps):
                 b.pos = b.pos + b.vel * dt / steps
@@ -137,7 +144,7 @@ class PinShooter:
                 v = b.vel - 2 * np.dot(b.vel, n) * n
                 b.vel = self.aim(v, p) * np.linalg.norm(b.vel)
                 b.pos = w.pos + n * (self.r + w.size * 0.9 + 1)
-                b.color = p.color
+                b.color, b.owner, b.born = p.color, i, now
                 self.effects.append(("block", w.pos.copy(), now, p.color))
         return False
 
@@ -182,7 +189,7 @@ class PinShooter:
                     tuple(c // 2 for c in p.color), p.facing)
             for w in p.wands(tags):
                 if self.loaded.get(w.id):
-                    d = self.aim(w.forward, p)
+                    d = w.forward
                     for k in range(1, 6):  # aim dots
                         pygame.draw.circle(s, p.color, w.pos + d * (w.size + k * self.r * 2.2), 3)
                     pygame.draw.circle(s, p.color, w.pos + d * (w.size + self.r + 4), self.r)
