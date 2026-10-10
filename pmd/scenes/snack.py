@@ -203,12 +203,16 @@ class SnackCastle:
         if m in self.mice:
             self.mice.remove(m)
             self.score += 1
+            self.app.sound.play("squeak", 0.7)
+            self.app.fx.burst(m.pos, m.color, n=18, speed=160, life=0.5, size=3.5,
+                              colors=[m.color, (240, 160, 175), (255, 255, 255)])
             for _ in range(m.reward):
                 jitter = np.random.uniform(-0.25, 0.25, 2) * self.cell
                 self.coins.append([m.pos + jitter, time.monotonic()])
 
     def hit(self, m, dmg):
         m.hp -= dmg
+        self.app.fx.burst(m.pos, (255, 240, 150), n=5, speed=120, life=0.2, size=2)
         if m.hp <= 0:
             self.kill(m)
 
@@ -225,8 +229,12 @@ class SnackCastle:
                 self.mice.remove(m)
                 self.snacks = max(0, self.snacks - m.steals)
                 self.effects.append(("steal", self.castle_pos.copy(), now))
+                self.app.sound.play("steal")
+                self.app.fx.burst(self.castle_pos, (255, 80, 60), n=30, speed=220, life=0.6,
+                                  colors=[(200, 140, 70), (230, 80, 120), (250, 220, 120)])
         if self.snacks == 0:
             self.game_over_at = now
+            self.app.sound.play("game_over")
             return
         self._attack(now)
         self._collect(now)
@@ -246,6 +254,7 @@ class SnackCastle:
                 if targets:
                     m = max(targets, key=lambda m: m.progress)  # the one closest to the snacks
                     self.effects.append(("shot", (u.pos.copy(), m.pos.copy()), now))
+                    self.app.sound.play("shoot", 0.5, min_gap=0.06)
                     self.hit(m, dmg)
                     self.cooldowns[k] = now + cd
             else:
@@ -253,6 +262,7 @@ class SnackCastle:
                 targets = [m for m in self.mice if np.linalg.norm(m.pos - u.pos) < rad * c + m.radius]
                 if targets:
                     self.effects.append(("swipe", (u.pos.copy(), rad * c), now))
+                    self.app.sound.play("swipe", 0.7)
                     for m in targets:
                         self.hit(m, dmg)
                     self.cooldowns[k] = now + cd
@@ -277,6 +287,8 @@ class SnackCastle:
                 if np.linalg.norm(coin[0] - collector.pos) < self.cell * 0.9:
                     self.carried += 1
                     self.effects.append(("pickup", coin[0].copy(), now))
+                    self.app.sound.play("coin", 0.6, min_gap=0.05)
+                    self.app.fx.burst(coin[0], art.GOLD, n=8, speed=120, life=0.35, size=3)
                 else:
                     keep.append(coin)
             self.coins = keep
@@ -285,6 +297,9 @@ class SnackCastle:
                 self.chest_coins += self.carried
                 self.carried = 0
                 self.effects.append(("deposit", chest.pos.copy(), now))
+                self.app.sound.play("deposit")
+                self.app.fx.burst(chest.pos, art.GOLD, n=35, speed=260, life=0.7, size=4,
+                                  colors=[art.GOLD, (255, 255, 200)])
 
     def _upgrades(self, dt, now):
         chest = self._chest()
@@ -306,6 +321,9 @@ class SnackCastle:
                 self.upgrade_progress.pop(k)
                 self.upgrade_locked.add(k)
                 self.effects.append(("upgrade", u.pos.copy(), now))
+                self.app.sound.play("upgrade")
+                self.app.fx.ring(u.pos, (120, 255, 160), u.size, n=30, speed=150, life=0.6, size=4)
+                self.app.fx.burst(u.pos, (120, 255, 160), n=30, speed=300, life=0.6, colors=[(120, 255, 160), (255, 255, 255)])
 
     # --- drawing ---------------------------------------------------------
     def draw(self, s, now):

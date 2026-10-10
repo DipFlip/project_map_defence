@@ -92,15 +92,21 @@ class PinShooter:
                     self.tray_balls[i] -= 1
                     self.loaded[w.id] = True
                     self.effects.append(("load", w.pos.copy(), now, p.color))
+                    self.app.sound.play("valve")
                 elif loaded and w.id in presses:
                     d = w.forward  # any direction the wand points
                     self.balls.append(Ball(w.pos + d * (w.size + self.r + 4), d * SPEED_MM * self.mm, p.color, i, now))
+                    self.app.sound.play("fire")
+                    self.app.fx.burst(w.pos + d * (w.size + self.r), p.color, n=20, speed=250, life=0.35,
+                                      direction=math.atan2(d[1], d[0]), spread=1.2, colors=[p.color, (255, 255, 255)])
                     self.loaded[w.id] = False
                     self.load_ready[w.id] = now + 0.6  # don't instantly reload when firing from the tray
         self._move_balls(dt, now, tags)
         for i in (0, 1):
             if all(down is not None for _, down in self.pins[i]):
                 self.winner, self.winner_at = 1 - i, now
+                self.app.sound.play("win")
+                self.app.fx.confetti(self.field)
 
     def _move_balls(self, dt, now, tags):
         f = self.field
@@ -122,6 +128,10 @@ class PinShooter:
                             pin[1] = now
                             b.vel = b.vel * 0.95
                             self.effects.append(("pin", pin[0].copy(), now, (255, 255, 255)))
+                            self.app.sound.play("pin", min_gap=0.02)
+                            self.app.fx.burst(pin[0], (255, 255, 255), n=14, speed=220, life=0.5, size=3,
+                                              direction=math.atan2(b.vel[1], b.vel[0]), spread=2.0,
+                                              colors=[(255, 255, 255), (230, 150, 30)])
                 if self._returned(b, now):
                     break
 
@@ -139,6 +149,8 @@ class PinShooter:
                     self.balls.remove(b)
                     self.loaded[w.id] = True
                     self.effects.append(("catch", w.pos.copy(), now, p.color))
+                    self.app.sound.play("catch")
+                    self.app.fx.ring(w.pos, p.color, w.size * 1.3, n=20, speed=-80, life=0.35)
                     return True
                 n = d / dist
                 v = b.vel - 2 * np.dot(b.vel, n) * n
@@ -146,6 +158,8 @@ class PinShooter:
                 b.pos = w.pos + n * (self.r + w.size * 0.9 + 1)
                 b.color, b.owner, b.born = p.color, i, now
                 self.effects.append(("block", w.pos.copy(), now, p.color))
+                self.app.sound.play("block")
+                self.app.fx.burst(b.pos, p.color, n=16, speed=200, life=0.35, colors=[p.color, (255, 255, 255)])
         return False
 
     def _returned(self, b, now):
@@ -156,6 +170,7 @@ class PinShooter:
                 self.balls.remove(b)
                 self.tray_balls[i] += 1
                 self.effects.append(("return", np.array(self.trays[i].center, float), now, p.color))
+                self.app.sound.play("roll", 0.6)
                 return True
         return False
 

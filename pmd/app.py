@@ -5,16 +5,21 @@ from dataclasses import replace
 
 import numpy as np
 
+from .particles import Particles
 from .projector import pygame
 from .table import TableView
 from .scenes.labyrinth import Labyrinth
 from .scenes.menu import Menu
+from .scenes.operation import Operation
 from .scenes.pins import PinShooter
 from .scenes.pong import Pong
 from .scenes.snack import SnackCastle
+from .scenes.water import Water
+from .sound import Sound
 from .tracker import WAND_IDS
 
-GAMES = {"snack": SnackCastle, "pong": Pong, "pins": PinShooter, "labyrinth": Labyrinth}
+GAMES = {"snack": SnackCastle, "pong": Pong, "pins": PinShooter, "labyrinth": Labyrinth, "operation": Operation,
+         "water": Water}
 MENU_AFTER_S = 3.0  # all wands off the table this long -> back to the menu
 
 
@@ -30,6 +35,8 @@ class App:
         self.facing = facing
         self.games = GAMES
         self.view = TableView(calib, proj.size, proj.screen)
+        self.sound = Sound()  # self.sound.play("name"): effects in pmd/sound.py
+        self.fx = Particles()  # particle effects drawn over every scene
         self.px_per_mm = self.view.px_per_mm or self._measure_scale()
         margin = int(10 * self.px_per_mm)
         self.field = pygame.Rect(0, 0, *self.view.size).inflate(-2 * margin, -2 * margin)
@@ -60,6 +67,8 @@ class App:
         return out
 
     def switch(self, name):
+        self.fx.clear()
+        self.sound.play("start" if name != "menu" else "click")
         self.scene = Menu(self) if name == "menu" else self.games[name](self)
 
     def _presses(self):
@@ -82,7 +91,9 @@ class App:
         elif not isinstance(self.scene, Menu) and now - self._wands_seen > MENU_AFTER_S:
             self.switch("menu")
         self.scene.update(dt, now, self.tags, presses)
+        self.fx.update(dt)
         self.scene.draw(self.view.canvas, now)
+        self.fx.draw(self.view.canvas)
         self.view.render(self.proj.screen)
 
     def run(self, duration=math.inf, snapshot_path=None, snapshot_every=5.0):

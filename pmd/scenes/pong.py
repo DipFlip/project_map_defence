@@ -1,7 +1,7 @@
 """Pong for two players at the short ends of the table.
 
 Each player's bouncer lies between their two wands (centred on their midpoint,
-at most 70% of the court's width). The ball bounces off it like off a moving
+at most 60% of the court's width). The ball bounces off it like off a moving
 wall: pushing the bouncer into the ball sends it back faster, sweeping it
 sideways adds spin-like sideways speed, and its angle steers the ball. Fast
 balls slowly relax back to a cruising speed.
@@ -25,7 +25,7 @@ RELAX_S = 2.5  # time constant for a fast ball to slow back to cruising speed
 RESTITUTION = 0.85  # how much of the push along the bouncer's normal comes back
 GRIP = 0.35  # share of the bouncer's sideways motion (relative to the ball) passed to the ball
 MIN_FORWARD = 0.35  # after a hit the ball heads to the opponent at least this fast (x cruise)
-MAX_PADDLE = 0.7  # bouncer length limit, fraction of the court's width
+MAX_PADDLE = 0.6  # bouncer length limit, fraction of the court's width
 PADDLE_HALF_THICK = 6
 
 
@@ -78,6 +78,8 @@ class Pong:
         self.vel = d * CRUISE_MM * self.mm * 0.9
         self.rally = 0
         self.trail.clear()
+        self.app.sound.play("valve")
+        self.app.fx.ring(self.ball, (255, 255, 230), self.r * 1.5, n=18, speed=120)
 
     def bounce(self, i, normal, paddle_vel, now):
         """Collision with a moving wall: reflect the velocity relative to the bouncer."""
@@ -96,6 +98,11 @@ class Pong:
         self.vel = v * np.clip(speed, MIN_MM * self.mm, MAX_MM * self.mm) / max(speed, 1e-6)
         self.rally += 1
         self.flash = (i, now)
+        hard = min(1.0, np.linalg.norm(self.vel) / (MAX_MM * self.mm * 0.6))
+        self.app.sound.play("hit", 0.5 + 0.5 * hard)
+        self.app.fx.burst(self.ball - normal * self.r, p.color, n=int(14 + 30 * hard), speed=150 + 400 * hard,
+                          life=0.45, size=4, spread=2.2, direction=math.atan2(normal[1], normal[0]),
+                          colors=[p.color, (255, 255, 255)])
 
     def update(self, dt, now, tags, presses):
         if self.winner is not None:
@@ -119,6 +126,8 @@ class Pong:
             self.ball += self.vel * dt / steps
             if self.ball[1] < f.top + self.r and self.vel[1] < 0 or self.ball[1] > f.bottom - self.r and self.vel[1] > 0:
                 self.vel[1] = -self.vel[1]
+                self.app.sound.play("wall", 0.6)
+                self.app.fx.burst(self.ball, (200, 200, 200), n=6, speed=120, life=0.25, size=2.5)
             for i, pad in paddles.items():
                 if pad is not None and self._touch(i, pad, now):
                     break
@@ -138,10 +147,17 @@ class Pong:
         if self.ball[0] < f.left - self.r or self.ball[0] > f.right + self.r:
             loser = [p.side for p in self.players].index("left" if self.ball[0] < f.left else "right")
             self.score[1 - loser] += 1
+            goal_x = f.left if self.players[loser].side == "left" else f.right
+            self.app.fx.burst((goal_x, self.ball[1]), self.players[1 - loser].color, n=60, speed=500, life=0.8, size=5,
+                              direction=0.0 if goal_x == f.left else math.pi, spread=2.5,
+                              colors=[self.players[1 - loser].color, (255, 255, 255)])
+            self.app.sound.play("score")
             self.ball = None
             self.serve_to, self.serve_at = loser, now + 1.2
             if self.score[1 - loser] >= WIN_SCORE:
                 self.winner, self.winner_at = 1 - loser, now
+                self.app.sound.play("win")
+                self.app.fx.confetti(f)
 
     @staticmethod
     def _closest(p, a, b):

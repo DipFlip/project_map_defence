@@ -66,6 +66,25 @@ Falling resets to the last checkpoint. Drawn in perspective from above the board
 Wand heights come from how big the tag looks (`pmd/heights.py`); calibrate with
 `tools/wand_height.py` (sweep each wand slowly between its lowest and highest point).
 
+## Operation
+Two surgeons at the short ends, one patient each. Either of your wands is the
+tweezers (tip just beyond the tag's printed top). Touch the highlighted organ to take
+it out; touching any other organ buzzes, lights the nose and freezes you for 1.2 s.
+First to remove 7 organs wins.
+
+## Water
+Tags A (10) and E (14) are taps on the far edge (the snack castle text side): turn
+one a quarter turn from how it lay to open it fully. A pours orange, E green; the
+liquid flows towards the players. Every other tag is a tilting plank and each wand's
+whole stick is a platform. Fill the containers with the colour they show (wrong
+liquid fizzles away); full ones vanish and new ones appear.
+
+## Sound and effects
+`pmd/sound.py` synthesises all effects at start-up; `pmd/particles.py` draws bursts,
+rings and confetti over every scene. Note: the Radxa's own audio output needs a
+topology firmware that isn't packaged yet (`QCS6490-Radxa-Dragon-Q6A-tplg.bin`), so
+plug in a USB or Bluetooth speaker to hear anything.
+
 ## Snack castle: mice vs. the snacks
 Mice run from the mouse hole along the path to steal snacks from the cheese castle.
 Lose all 20 snacks and a new game starts after 8 s. Mice get stronger every 30 s.

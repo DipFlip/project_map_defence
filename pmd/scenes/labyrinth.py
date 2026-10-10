@@ -163,10 +163,20 @@ class Labyrinth:
         for _ in range(steps):
             if self._step(dt / steps, a, b, now):
                 break
-        if _in(self.checkpoint_zone, *self.pos) and not self.air:
+        if _in(self.checkpoint_zone, *self.pos) and not self.air and not np.array_equal(self.respawn, self.checkpoint_pos):
             self.respawn = self.checkpoint_pos.copy()
+            self.app.sound.play("checkpoint")
+            self.app.fx.ring(self.canvas_xy(self.checkpoint_pos), (230, 230, 90), 12 * self.mm, n=24, speed=80)
         if not self.air and np.linalg.norm(self.pos - self.goal) < self.goal_r:
             self.won_at = now
+            self.app.sound.play("win")
+            self.app.fx.confetti(self.app.field)
+            self.app.fx.burst(self.canvas_xy(self.goal), (40, 200, 90), n=60, speed=350, life=0.9,
+                              colors=[(40, 200, 90), (230, 255, 230), (255, 220, 80)])
+
+    def canvas_xy(self, p):
+        """Board mm -> canvas px, ignoring tilt and height (good enough for effects)."""
+        return self.center + np.asarray(p, float) * self.mm
 
     def _step(self, dt, a, b, now):
         """One physics substep; returns True when the ball fell and was reset."""
@@ -179,6 +189,8 @@ class Labyrinth:
             if hole or h < self.z - 1.0:  # rolled off an edge or into a hole
                 self.air, self.vz = True, 0.0
                 self.pos = new
+                if self.z > 1.0:  # off a ledge: a jump
+                    self.app.sound.play("jump", 0.7)
             elif h > self.z + 2.5:  # bumped into the side of something higher
                 self.vel = -self.vel * RESTITUTION
             else:
@@ -190,6 +202,9 @@ class Labyrinth:
             h, hole = self.floor(*self.pos)
             if not hole and self.z <= h:
                 if self.z >= h - 6:  # landed on top
+                    if self.vz < -150:
+                        self.app.sound.play("block", 0.5)
+                        self.app.fx.burst(self.canvas_xy(self.pos), (200, 170, 120), n=10, speed=100, life=0.3, size=2.5)
                     self.z, self.vz, self.air = h, 0.0, False
                 else:  # hit the side of something higher (e.g. a short jump): drop back
                     self.pos = self.pos - self.vel * dt
@@ -197,6 +212,8 @@ class Labyrinth:
             elif hole and self.z < -25:
                 self.falls += 1
                 self.flash = (self.pos.copy(), now)
+                self.app.sound.play("fall")
+                self.app.fx.burst(self.canvas_xy(self.pos), (120, 120, 130), n=25, speed=120, life=0.6, size=4)
                 self.pos, self.vel = self.respawn.copy(), np.zeros(2)
                 self.z, self.vz, self.air = self.floor(*self.pos)[0], 0.0, False
                 return True
@@ -217,6 +234,8 @@ class Labyrinth:
                 vn = np.dot(self.vel, n)
                 if vn < 0:
                     self.vel = self.vel - (1 + RESTITUTION) * vn * n
+                    if vn < -60:
+                        self.app.sound.play("wall", min(1.0, -vn / 300), min_gap=0.08)
 
     # --- drawing -------------------------------------------------------
     def project(self, pts, z_local, a, b, c):
