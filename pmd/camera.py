@@ -22,7 +22,7 @@ def find_camera(name_hint="U20CAM"):
 
 
 class Camera:
-    def __init__(self, device=None, width=1920, height=1080):
+    def __init__(self, device=None, width=1920, height=1080, buffers=2):
         self.device = device or find_camera()
         self.cap = cv2.VideoCapture(self.device, cv2.CAP_V4L2)
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
@@ -30,7 +30,7 @@ class Camera:
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         self.cap.set(cv2.CAP_PROP_FPS, 30)
         # 2 buffers keeps latency low; 1 buffer makes the camera drop to 15 fps
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, buffers)
         if not self.cap.isOpened():
             raise RuntimeError(f"cannot open {self.device}")
         self._cond = threading.Condition()

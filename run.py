@@ -8,18 +8,16 @@ import time
 
 from pmd import CALIB_PATH, DATA_DIR
 from pmd.calibration import Calibration
-from pmd.camera import Camera
 from pmd.game import Game
 from pmd.projector import Projector
+from pmd.system import performance_governor
 from pmd.tracker import Tracker
 
 
 def main():
     duration = float(sys.argv[1]) if len(sys.argv) > 1 else float("inf")
     calib = Calibration.load(CALIB_PATH)
-    cam = Camera()
-    cam.manual_exposure(calib.exposure * 2)
-    tracker = Tracker(cam, calib)
+    tracker = Tracker(CALIB_PATH)
     proj = Projector()
     game = Game(proj, tracker, calib)
     t0 = time.monotonic()
@@ -27,12 +25,11 @@ def main():
         game.run(duration, snapshot_path=os.path.join(DATA_DIR, "game_cam.jpg"))
     finally:
         print(f"ran {time.monotonic() - t0:.0f}s, draw {proj.clock.get_fps():.0f} fps, "
-              f"detect {tracker.fps:.1f} Hz, caught {game.score}, snacks {game.snacks}")
+              f"detect {tracker.fps:.1f} Hz, frame->pose roi {tracker.age_ms['roi']:.0f} ms / full {tracker.age_ms['full']:.0f} ms, caught {game.score}, snacks {game.snacks}")
         tracker.close()
-        cam.auto_exposure()
-        cam.close()
         proj.close()
 
 
 if __name__ == "__main__":
-    main()
+    with performance_governor():
+        main()

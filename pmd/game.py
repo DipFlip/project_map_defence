@@ -409,12 +409,6 @@ class Game:
             s.blit(t, t.get_rect(center=(mid[0], mid[1] + self.cell * 1.1)))
 
     # --- loop --------------------------------------------------------------
-    def snapshot(self, path):
-        """Save what the camera currently sees (handy when debugging over ssh)."""
-        frame, _, _ = self.tracker.camera.latest()
-        if frame is not None:
-            cv2.imwrite(path, frame)
-
     def run(self, duration=math.inf, snapshot_path=None, snapshot_every=5.0):
         t_prev = t_start = last_snap = time.monotonic()
         while self.proj.pump() and time.monotonic() - t_start < duration:
@@ -425,5 +419,5 @@ class Game:
             self.proj.flip()
             self.proj.clock.tick(60)
             if snapshot_path and now - last_snap > snapshot_every:
-                self.snapshot(snapshot_path)
+                self.tracker.snapshot(snapshot_path)
                 last_snap = now
