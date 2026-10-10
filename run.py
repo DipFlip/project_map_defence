@@ -9,7 +9,7 @@ import time
 from pmd import CALIB_PATH, DATA_DIR
 from pmd.calibration import Calibration
 from pmd.app import App
-from pmd.projector import Projector
+from pmd.projector import Projector, pygame
 from pmd.system import performance_governor
 from pmd.tracker import Tracker
 
@@ -27,6 +27,7 @@ def main():
         print(f"ran {time.monotonic() - t0:.0f}s, draw {proj.clock.get_fps():.0f} fps, "
               f"detect {tracker.fps:.1f} Hz, frame->pose roi {tracker.age_ms['roi']:.0f} ms / full {tracker.age_ms['full']:.0f} ms")
         tracker.close()
+        pygame.mixer.quit()  # closing the HDMI audio stream cleanly avoids an ALSA error on exit
         proj.close()
 
 

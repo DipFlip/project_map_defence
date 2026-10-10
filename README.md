@@ -66,11 +66,12 @@ Falling resets to the last checkpoint. Drawn in perspective from above the board
 Wand heights come from how big the tag looks (`pmd/heights.py`); calibrate with
 `tools/wand_height.py` (sweep each wand slowly between its lowest and highest point).
 
-## Operation
-Two surgeons at the short ends, one patient each. Either of your wands is the
-tweezers (tip just beyond the tag's printed top). Touch the highlighted organ to take
-it out; touching any other organ buzzes, lights the nose and freezes you for 1.2 s.
-First to remove 7 organs wins.
+## Sneak
+Single player. Put any wand on the green start spot; that wand is your agent. Creep
+through the maze to the diamond and back without being seen: guards patrol with
+flashlight cones (walls block them), and staying in one for half a second gets you
+caught. Brushing a wall, or lifting the wand over one, makes a noise that brings
+nearby guards running.
 
 ## Water
 Tags A (10) and E (14) are taps on the far edge (the snack castle text side): turn

@@ -96,10 +96,12 @@ class Menu:
                 pygame.draw.line(s, (90, 65, 40), c + (-r * 1.4 + k * r, -r * 0.6), c + (-r * 1.4 + k * r, r * 1.4), 4)
             pygame.draw.circle(s, (40, 200, 90), c + (r * 0.9, -r * 0.9), r * 0.3)
             pygame.draw.circle(s, (200, 205, 220), c + (math.sin(now) * r * 0.6, r * 0.5), r * 0.22)
-        elif name == "operation":
-            pygame.draw.ellipse(s, (230, 190, 160), (c[0] - r * 0.8, c[1] - r * 1.5, r * 1.6, r * 2.6))
-            pygame.draw.circle(s, (220, 40, 50), c + (0, -r * 0.4), r * 0.3)
-            pygame.draw.circle(s, (255, 30, 20) if int(now * 2) % 2 else (200, 120, 110), c + (0, -r * 1.55), r * 0.2)
+        elif name == "sneak":
+            pygame.draw.polygon(s, (190, 175, 90), [c + (r * 0.9, -r * 0.2), c + (-r * 0.6, -r * 1.0), c + (-r * 0.6, r * 0.6)])
+            pygame.draw.circle(s, (200, 40, 40), c + (r * 0.9, -r * 0.2), r * 0.22)
+            d = c + (-r * 1.1, r * 1.0)
+            k = r * 0.3
+            pygame.draw.polygon(s, (120, 240, 230), [d + (0, -k), d + (k, 0), d + (0, k), d + (-k, 0)])
         elif name == "water":
             for k, col in enumerate(((255, 140, 40), (40, 215, 160))):
                 x = c[0] + (k - 0.5) * r * 1.6

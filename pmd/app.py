@@ -10,17 +10,18 @@ from .projector import pygame
 from .table import TableView
 from .scenes.labyrinth import Labyrinth
 from .scenes.menu import Menu
-from .scenes.operation import Operation
 from .scenes.pins import PinShooter
 from .scenes.pong import Pong
 from .scenes.snack import SnackCastle
+from .scenes.sneak import Sneak
 from .scenes.water import Water
 from .sound import Sound
 from .tracker import WAND_IDS
 
-GAMES = {"snack": SnackCastle, "pong": Pong, "pins": PinShooter, "labyrinth": Labyrinth, "operation": Operation,
+GAMES = {"snack": SnackCastle, "pong": Pong, "pins": PinShooter, "labyrinth": Labyrinth, "sneak": Sneak,
          "water": Water}
 MENU_AFTER_S = 3.0  # all wands off the table this long -> back to the menu
+EDGE_INSET_MM = 15  # dark border inside the measured table edge
 
 
 class App:
@@ -38,8 +39,11 @@ class App:
         self.sound = Sound()  # self.sound.play("name"): effects in pmd/sound.py
         self.fx = Particles()  # particle effects drawn over every scene
         self.px_per_mm = self.view.px_per_mm or self._measure_scale()
+        # the measured table edge is slightly generous: keep a dark border so no light spills over it
+        inset = int(EDGE_INSET_MM * self.px_per_mm)
+        self.table_rect = pygame.Rect(0, 0, *self.view.size).inflate(-2 * inset, -2 * inset)
         margin = int(10 * self.px_per_mm)
-        self.field = pygame.Rect(0, 0, *self.view.size).inflate(-2 * margin, -2 * margin)
+        self.field = self.table_rect.inflate(-2 * margin, -2 * margin)
         self.tags = self._canvas_tags()
         self._was_pressed = {}
         self._wands_seen = time.monotonic()
@@ -52,6 +56,12 @@ class App:
             self.proj.pump()
             time.sleep(0.05)
         return self.tracker.px_per_mm()
+
+    def _black_border(self, s):
+        W, H = self.view.size
+        r = self.table_rect
+        for rect in ((0, 0, W, r.top), (0, r.bottom, W, H - r.bottom), (0, 0, r.left, H), (r.right, 0, W - r.right, H)):
+            s.fill((0, 0, 0), rect)
 
     def _canvas_tags(self):
         """Tracker poses (projector px) converted to canvas coordinates."""
@@ -94,6 +104,7 @@ class App:
         self.fx.update(dt)
         self.scene.draw(self.view.canvas, now)
         self.fx.draw(self.view.canvas)
+        self._black_border(self.view.canvas)
         self.view.render(self.proj.screen)
 
     def run(self, duration=math.inf, snapshot_path=None, snapshot_every=5.0):
