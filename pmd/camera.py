@@ -28,7 +28,9 @@ class Camera:
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
+        # 2 buffers keeps latency low; 1 buffer makes the camera drop to 15 fps
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
         if not self.cap.isOpened():
             raise RuntimeError(f"cannot open {self.device}")
         self._cond = threading.Condition()
@@ -77,7 +79,7 @@ class Camera:
         subprocess.run(args, check=True)
 
     def manual_exposure(self, exposure):
-        self.set_controls(auto_exposure=1, exposure_time_absolute=exposure)
+        self.set_controls(auto_exposure=1, exposure_time_absolute=exposure, exposure_dynamic_framerate=0)
 
     def auto_exposure(self):
         self.set_controls(auto_exposure=3)

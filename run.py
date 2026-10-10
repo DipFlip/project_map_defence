@@ -27,7 +27,7 @@ def main():
         game.run(duration, snapshot_path=os.path.join(DATA_DIR, "game_cam.jpg"))
     finally:
         print(f"ran {time.monotonic() - t0:.0f}s, draw {proj.clock.get_fps():.0f} fps, "
-              f"detect {tracker.fps:.1f} Hz, score {game.score}, lives {game.lives}")
+              f"detect {tracker.fps:.1f} Hz, caught {game.score}, snacks {game.snacks}")
         tracker.close()
         cam.auto_exposure()
         cam.close()

@@ -1,127 +1,427 @@
-"""Minimal tower-defence loop on top of the tracker.
+"""Mice vs. the snack castle: a tower defence played with tags on the table.
 
-Everything is in projector pixels. Towers are physical tags (ids in
-TOWER_IDS); enemies walk a path across the calibrated table area and towers
-shoot whatever is in range. This is a skeleton to build the real game on.
+Everything is in projector pixels. The playfield is a grid whose cell is one
+field-tag spacing (40 mm), sized from the tags' known physical size.
+
+Pieces (tag ids from the ar-of-empires print kit, A-J = 10-19):
+  10            coin collector: walk it over coins, bring them to the chest
+  16            chest: holds coins; park an attacker next to it to upgrade it
+  12, 14, 19    cats: swipe every mouse around them
+  other 11-18   slingshots: shoot straight ahead in a narrow cone
 """
 import math
-import random
 import time
 
+import cv2
 import numpy as np
 
+from . import art
 from .projector import pygame
 
-TOWER_IDS = range(10, 20)  # the cut-out tags A-J from the print kit
-TOWER_RANGE = 160
-TOWER_COOLDOWN = 0.6
+GRID_MM = 40.0
+COLLECTOR_IDS = {10}
+CHEST_IDS = {16}
+CAT_IDS = {12, 14, 19}
+SLINGSHOT_IDS = set(range(10, 20)) - COLLECTOR_IDS - CHEST_IDS - CAT_IDS
+ATTACKER_IDS = CAT_IDS | SLINGSHOT_IDS
+
+MAX_SNACKS = 20
+MAX_LEVEL = 4
+UPGRADE_HOLD_S = 1.5
+RESTART_AFTER_S = 8.0
 
 
-class Enemy:
-    def __init__(self, path, speed):
+def upgrade_cost(level):
+    return 5 * (level + 1)
+
+
+def slingshot_stats(level):
+    """(damage, cooldown s, range in cells, half-angle rad)."""
+    return 1 + level, 0.6 * 0.85 ** level, 1.0 + 0.25 * level, math.radians(7.5 + 1.5 * level)
+
+
+def cat_stats(level):
+    """(damage, cooldown s, radius in cells)."""
+    return 2 + level, 2.0 * 0.88 ** level, 1.2 + 0.15 * level
+
+
+class Mouse:
+    def __init__(self, path, speed, hp, radius, color, reward, steals):
         self.path, self.speed = path, speed
         self.seg, self.t = 0, 0.0
         self.pos = np.array(path[0], float)
-        self.hp = self.max_hp = 3
+        self.dir = np.array([1.0, 0.0])
+        self.hp = self.max_hp = hp
+        self.radius, self.color, self.reward, self.steals = radius, color, reward, steals
+
+    @property
+    def progress(self):
+        return self.seg + self.t
 
     def update(self, dt):
-        """Advance along the path; returns True when the end is reached."""
+        """Advance along the path; returns True when the castle is reached."""
         remaining = self.speed * dt
         while remaining > 0 and self.seg < len(self.path) - 1:
             a, b = np.array(self.path[self.seg]), np.array(self.path[self.seg + 1])
             seg_len = np.linalg.norm(b - a)
+            self.dir = (b - a) / seg_len
             step = min(remaining, (1 - self.t) * seg_len)
             self.t += step / seg_len
             remaining -= step
+            self.pos = a + (b - a) * self.t
             if self.t >= 1 - 1e-9:
                 self.seg, self.t = self.seg + 1, 0.0
-            self.pos = a + (b - a) * self.t if self.t else np.array(self.path[self.seg], float)
         return self.seg >= len(self.path) - 1
 
 
 class Game:
     def __init__(self, proj, tracker, calib):
         self.proj, self.tracker, self.calib = proj, tracker, calib
-        self.font = pygame.font.SysFont(None, 40)
-        poly = np.array(calib.table_poly or [(0, 0), (proj.width, 0), (proj.width, proj.height), (0, proj.height)])
-        self.table_poly = poly
-        self.path = self._make_path(poly)
-        self.enemies, self.shots = [], []
-        self.cooldowns = {}
-        self.lives, self.score = 20, 0
-        self.next_spawn = 0.0
+        self.cell = self._measure_cell()
+        self.font = pygame.font.SysFont(None, int(self.cell * 0.55))
+        self.small = pygame.font.SysFont(None, int(self.cell * 0.4))
+        self.big = pygame.font.SysFont(None, int(self.cell * 1.2))
+        self._build_board()
+        self.reset()
 
-    @staticmethod
-    def _make_path(poly):
-        """A zig-zag path inside the table's bounding box (shrunk a bit)."""
-        x0, y0 = poly.min(axis=0)
-        x1, y1 = poly.max(axis=0)
-        mx, my = (x1 - x0) * 0.12, (y1 - y0) * 0.15
-        x0, x1, y0, y1 = x0 + mx, x1 - mx, y0 + my, y1 - my
-        n = 4
+    # --- setup ---------------------------------------------------------
+    def _measure_cell(self):
+        """Grid cell in projector px, from the tags' known physical size."""
+        deadline = time.monotonic() + 2.0
+        while not self.tracker.tags() and time.monotonic() < deadline:
+            self.proj.pump()
+            time.sleep(0.05)
+        return GRID_MM * self.tracker.px_per_mm()
+
+    def _build_board(self):
+        W, H = self.proj.size
+        poly = np.array(self.calib.table_poly or [(0, 0), (W, 0), (W, H), (0, H)], np.int32)
+        mask = np.zeros((H, W), np.uint8)
+        cv2.fillPoly(mask, [poly], 255)
+        margin = int(self.cell * 0.3)
+        mask = cv2.erode(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * margin + 1, 2 * margin + 1)))
+        ys, xs = np.nonzero(mask)
+        x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
+        c = self.cell
+        cols, rows = int((x1 - x0) // c), int((y1 - y0) // c)
+        self.origin = np.array([x0 + ((x1 - x0) - cols * c) / 2, y0 + ((y1 - y0) - rows * c) / 2])
+        self.cols, self.rows = cols, rows
+
+        def inside(r, col):
+            px = self.origin + np.array([col, r]) * c
+            return all(0 <= x < W and 0 <= y < H and mask[int(y), int(x)]
+                       for x, y in (px, px + (c - 1, 0), px + (0, c - 1), px + (c - 1, c - 1)))
+
+        self.valid = np.array([[inside(r, col) for col in range(cols)] for r in range(rows)])
+        self.mask = mask
+
+        # serpentine path: lanes every 4 rows, row 0 kept free for the HUD
+        lanes = list(range(1, rows - 1, 4))
+        lo, hi = 0, cols - 1
+        for r in range(lanes[0], lanes[-1] + 1):
+            run = np.nonzero(self.valid[r])[0]
+            lo, hi = max(lo, run.min()), min(hi, run.max())
+        lo, hi = lo + 1, hi - 1  # room for the mouse hole and the castle
         pts = []
-        for i in range(n + 1):
-            x = x0 + (x1 - x0) * i / n
-            pts += [(x, y0), (x, y1)] if i % 2 == 0 else [(x, y1), (x, y0)]
-        return pts
+        for i, r in enumerate(lanes):
+            a, b = (lo, hi) if i % 2 == 0 else (hi, lo)
+            pts += [self.cell_center(r, a), self.cell_center(r, b)]
+        self.path = pts
+        self.path_cells = set()
+        for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+            n = int(round(max(abs(bx - ax), abs(by - ay)) / c))
+            for k in range(n + 1):
+                self.path_cells.add(self.cell_of((ax + (bx - ax) * k / n, ay + (by - ay) * k / n)))
+        self.castle_pos = np.array(pts[-1])
+        self.hud_pos = self.cell_center(0, cols // 2)
+        self._background = self._render_background()
+
+    def cell_center(self, r, col):
+        return tuple(self.origin + (np.array([col, r]) + 0.5) * self.cell)
+
+    def cell_of(self, p):
+        col, r = ((np.asarray(p) - self.origin) // self.cell).astype(int)
+        return int(r), int(col)
+
+    def _render_background(self):
+        s = pygame.Surface(self.proj.size)
+        s.fill((0, 0, 0))
+        poly = [tuple(p) for p in self.calib.table_poly] if self.calib.table_poly else None
+        if poly:
+            pygame.draw.polygon(s, (14, 22, 14), poly)
+        c = self.cell
+        for r in range(self.rows):
+            for col in range(self.cols):
+                if self.valid[r, col]:
+                    x, y = self.origin + np.array([col, r]) * c
+                    pygame.draw.rect(s, (24, 38, 24), (x, y, c, c), 1)
+        pygame.draw.lines(s, art.PATH_EDGE, False, self.path, int(c * 0.95))
+        pygame.draw.lines(s, art.PATH, False, self.path, int(c * 0.8))
+        for p in self.path:
+            pygame.draw.circle(s, art.PATH, p, c * 0.4)
+        art.mouse_hole(s, self.path[0], c)
+        return s
+
+    def reset(self):
+        self.mice, self.coins, self.effects = [], [], []
+        self.snacks = MAX_SNACKS
+        self.chest_coins = 0
+        self.carried = 0
+        self.score = 0
+        self.levels = {}
+        self.cooldowns = {}
+        self.upgrade_progress = {}
+        self.upgrade_locked = set()
+        self.t_start = time.monotonic()
+        self.next_spawn = self.t_start + 2.0
+        self.spawned = 0
+        self.game_over_at = None
+        self.units = {}
+
+    # --- rules ----------------------------------------------------------
+    def difficulty(self, now):
+        """Grows by 1 every 30 s."""
+        return 1 + (now - self.t_start) / 30
+
+    def spawn(self, now):
+        lvl = self.difficulty(now)
+        self.spawned += 1
+        tier = int(lvl) - 1
+        hp = max(1, round(2 * 1.3 ** (lvl - 1)))
+        speed = self.cell * min(1.2 + 0.1 * (lvl - 1), 2.5)
+        shade = max(60, 170 - tier * 18)
+        color = (shade, shade - 5, shade - 10 + min(tier * 6, 30))
+        r = self.cell * 0.2 * (1 + 0.06 * min(tier, 6))
+        reward, steals = 1 + tier // 2, 1
+        if self.spawned % 12 == 0:  # big rat
+            hp, speed, r, color, reward, steals = hp * 5, speed * 0.7, r * 1.6, (110, 80, 60), reward * 4, 3
+        self.mice.append(Mouse(self.path, speed, hp, r, color, reward, steals))
+        self.next_spawn = now + max(0.45, 2.0 / (1 + 0.2 * (lvl - 1)))
+
+    def kill(self, m):
+        if m in self.mice:
+            self.mice.remove(m)
+            self.score += 1
+            for _ in range(m.reward):
+                jitter = np.random.uniform(-0.25, 0.25, 2) * self.cell
+                self.coins.append([m.pos + jitter, time.monotonic()])
+
+    def hit(self, m, dmg):
+        m.hp -= dmg
+        if m.hp <= 0:
+            self.kill(m)
 
     def update(self, dt, now):
+        tags = self.tracker.tags()
+        self.units = {k: t for k, t in tags.items() if 10 <= k <= 19}
+        if self.game_over_at is not None:
+            if now - self.game_over_at > RESTART_AFTER_S:
+                self.reset()
+            return
         if now >= self.next_spawn:
-            self.enemies.append(Enemy(self.path, random.uniform(60, 90)))
-            self.next_spawn = now + 1.5
-        for e in list(self.enemies):
-            if e.update(dt):
-                self.enemies.remove(e)
-                self.lives -= 1
-        towers = {k: t for k, t in self.tracker.tags().items() if k in TOWER_IDS}
-        for k, tower in towers.items():
-            if now < self.cooldowns.get(k, 0):
+            self.spawn(now)
+        for m in list(self.mice):
+            if m.update(dt):
+                self.mice.remove(m)
+                self.snacks = max(0, self.snacks - m.steals)
+                self.effects.append(("steal", self.castle_pos.copy(), now))
+        if self.snacks == 0:
+            self.game_over_at = now
+            return
+        self._attack(now)
+        self._collect(now)
+        self._upgrades(dt, now)
+        self.coins = [c for c in self.coins if now - c[1] < 45]
+        self.effects = [e for e in self.effects if now - e[2] < 0.6]
+
+    def _attack(self, now):
+        c = self.cell
+        for k, u in self.units.items():
+            if k not in ATTACKER_IDS or now < self.cooldowns.get(k, 0):
                 continue
-            in_range = [e for e in self.enemies if np.linalg.norm(e.pos - tower.pos) < TOWER_RANGE]
-            if in_range:
-                target = min(in_range, key=lambda e: np.linalg.norm(e.pos - tower.pos))
-                target.hp -= 1
-                self.shots.append((tower.pos.copy(), target.pos.copy(), now))
-                self.cooldowns[k] = now + TOWER_COOLDOWN
-                if target.hp <= 0:
-                    self.enemies.remove(target)
-                    self.score += 1
-        self.shots = [s for s in self.shots if now - s[2] < 0.12]
-        self.towers = towers
+            lvl = self.levels.get(k, 0)
+            if k in SLINGSHOT_IDS:
+                dmg, cd, rng, half = slingshot_stats(lvl)
+                targets = [m for m in self.mice if self._in_cone(u, m, rng * c, half)]
+                if targets:
+                    m = max(targets, key=lambda m: m.progress)  # the one closest to the snacks
+                    self.effects.append(("shot", (u.pos.copy(), m.pos.copy()), now))
+                    self.hit(m, dmg)
+                    self.cooldowns[k] = now + cd
+            else:
+                dmg, cd, rad = cat_stats(lvl)
+                targets = [m for m in self.mice if np.linalg.norm(m.pos - u.pos) < rad * c + m.radius]
+                if targets:
+                    self.effects.append(("swipe", (u.pos.copy(), rad * c), now))
+                    for m in targets:
+                        self.hit(m, dmg)
+                    self.cooldowns[k] = now + cd
 
-    def draw(self):
+    @staticmethod
+    def _in_cone(u, m, rng, half):
+        d = m.pos - u.pos
+        dist = np.linalg.norm(d)
+        if dist > rng + m.radius or dist < 1e-6:
+            return False
+        off = abs((math.atan2(d[1], d[0]) - u.angle + math.pi) % (2 * math.pi) - math.pi)
+        return off <= half or dist * math.sin(min(off - half, math.pi / 2)) <= m.radius
+
+    def _chest(self):
+        return next((u for k, u in self.units.items() if k in CHEST_IDS), None)
+
+    def _collect(self, now):
+        collector = next((u for k, u in self.units.items() if k in COLLECTOR_IDS), None)
+        if collector is not None:
+            keep = []
+            for coin in self.coins:
+                if np.linalg.norm(coin[0] - collector.pos) < self.cell * 0.9:
+                    self.carried += 1
+                    self.effects.append(("pickup", coin[0].copy(), now))
+                else:
+                    keep.append(coin)
+            self.coins = keep
+            chest = self._chest()
+            if chest is not None and self.carried and np.linalg.norm(chest.pos - collector.pos) < self.cell * 1.8:
+                self.chest_coins += self.carried
+                self.carried = 0
+                self.effects.append(("deposit", chest.pos.copy(), now))
+
+    def _upgrades(self, dt, now):
+        chest = self._chest()
+        for k in ATTACKER_IDS:
+            u = self.units.get(k)
+            near = chest is not None and u is not None and np.linalg.norm(chest.pos - u.pos) < self.cell * 1.8
+            if not near:
+                self.upgrade_progress.pop(k, None)
+                if u is not None or chest is None:
+                    self.upgrade_locked.discard(k)  # moved away: may upgrade again next visit
+                continue
+            lvl = self.levels.get(k, 0)
+            if k in self.upgrade_locked or lvl >= MAX_LEVEL or self.chest_coins < upgrade_cost(lvl):
+                continue
+            self.upgrade_progress[k] = self.upgrade_progress.get(k, 0) + dt
+            if self.upgrade_progress[k] >= UPGRADE_HOLD_S:
+                self.chest_coins -= upgrade_cost(lvl)
+                self.levels[k] = lvl + 1
+                self.upgrade_progress.pop(k)
+                self.upgrade_locked.add(k)
+                self.effects.append(("upgrade", u.pos.copy(), now))
+
+    # --- drawing ---------------------------------------------------------
+    def draw(self, now):
         s = self.proj.screen
-        s.fill((0, 0, 0))
-        pygame.draw.polygon(s, (25, 30, 25), self.table_poly)
-        pygame.draw.lines(s, (90, 70, 40), False, self.path, 34)
-        for tower in self.towers.values():
-            x, y = tower.pos
-            pygame.draw.circle(s, (40, 60, 110), (x, y), TOWER_RANGE, 2)
-            pygame.draw.circle(s, (255, 255, 255), (x, y), max(tower.size * 0.9, 20))  # keep tag lit
-        for e in self.enemies:
-            pygame.draw.circle(s, (220, 50, 40), e.pos, 16)
-            w = 32 * e.hp / e.max_hp
-            pygame.draw.rect(s, (80, 220, 80), (e.pos[0] - 16, e.pos[1] - 26, w, 5))
-        for a, b, _ in self.shots:
-            pygame.draw.line(s, (255, 240, 120), a, b, 4)
-        hud = self.font.render(f"lives {self.lives}   score {self.score}", True, (220, 220, 220))
-        x0, y0 = self.table_poly.min(axis=0)
-        s.blit(hud, (x0 + 20, y0 + 10))
+        s.blit(self._background, (0, 0))
+        c = self.cell
+        art.castle(s, self.castle_pos, c, self.snacks, MAX_SNACKS, self.small)
 
+        # weapon reach under everything else
+        for k, u in self.units.items():
+            lvl = self.levels.get(k, 0)
+            if k in SLINGSHOT_IDS:
+                _, _, rng, half = slingshot_stats(lvl)
+                art.cone(s, u.pos, u.angle, half, rng * c, (60, 90, 190))
+            elif k in CAT_IDS:
+                pygame.draw.circle(s, (110, 60, 20), u.pos, cat_stats(lvl)[2] * c, 2)
+
+        for pos, t0 in self.coins:
+            fade = 1.0 if now - t0 < 35 else max(0.2, 1 - (now - t0 - 35) / 10)
+            art.coin(s, pos, c * 0.13, fade)
+        for m in self.mice:
+            art.mouse(s, m.pos, m.dir, m.radius, m.color, now, m.hp / m.max_hp)
+
+        for k, u in self.units.items():
+            self._draw_unit(s, k, u, now)
+
+        for kind, data, t0 in self.effects:
+            age = (now - t0) / 0.6
+            if kind == "shot" and age < 0.25:
+                a, b = data
+                pygame.draw.line(s, (255, 240, 150), a, b, 3)
+                pygame.draw.circle(s, (255, 255, 200), b, 6)
+            elif kind == "swipe":
+                pos, rad = data
+                pygame.draw.circle(s, (255, 150, 50), pos, rad * (0.5 + age * 0.5), 4)
+                for i in (-1, 0, 1):
+                    off = np.array([i * 10, 0])
+                    pygame.draw.line(s, (255, 220, 200), pos + off + (-rad * 0.3, -rad * 0.4),
+                                     pos + off + (rad * 0.3, rad * 0.4), 3)
+            elif kind in ("pickup", "deposit", "upgrade"):
+                color = {"pickup": art.GOLD, "deposit": art.GOLD, "upgrade": (120, 255, 160)}[kind]
+                pygame.draw.circle(s, color, data, c * (0.3 + age * 0.9), 3)
+            elif kind == "steal":
+                pygame.draw.circle(s, (255, 60, 60), data, c * (0.5 + age * 1.5), 5)
+
+        self._draw_hud(s, now)
+
+    def _draw_unit(self, s, k, u, now):
+        c = self.cell
+        lit = u.size * 0.85
+        pygame.draw.circle(s, (255, 255, 255), u.pos, lit)  # keep the tag readable for the camera
+        lvl = self.levels.get(k, 0)
+        if k in SLINGSHOT_IDS:
+            pygame.draw.circle(s, (90, 140, 255), u.pos, lit + 5, 4)
+            tip = u.pos + u.forward * (lit + 14)
+            pygame.draw.line(s, (90, 140, 255), u.pos + u.forward * (lit + 5), tip, 5)
+        elif k in CAT_IDS:
+            pygame.draw.circle(s, (255, 150, 50), u.pos, lit + 5, 4)
+            for sgn in (-1, 1):  # cat ears on the tag's printed top
+                base = u.pos + art.rot(u.forward, sgn * 0.6) * (lit + 3)
+                tip = u.pos + art.rot(u.forward, sgn * 0.45) * (lit + 22)
+                side = art.rot(u.forward, sgn * 0.6 + sgn * 0.5) * (lit + 3)
+                pygame.draw.polygon(s, (255, 150, 50), [base, tip, u.pos + side])
+        elif k in COLLECTOR_IDS:
+            pygame.draw.circle(s, art.GOLD, u.pos, lit + 5, 4)
+            pygame.draw.circle(s, art.GOLD, u.pos, c * 0.9, 1)
+            if self.carried:
+                t = self.font.render(f"{self.carried}", True, art.GOLD)
+                s.blit(t, t.get_rect(midleft=(u.pos[0] + lit + 10, u.pos[1])))
+        elif k in CHEST_IDS:
+            box = pygame.Rect(0, 0, lit * 2 + 16, lit * 2 + 16)
+            box.center = (int(u.pos[0]), int(u.pos[1]))
+            pygame.draw.rect(s, (150, 95, 40), box, 6, border_radius=6)
+            pygame.draw.circle(s, (120, 80, 30), u.pos, c * 1.8, 1)
+            t = self.font.render(f"{self.chest_coins}", True, art.GOLD)
+            s.blit(t, t.get_rect(midtop=(u.pos[0], box.bottom + 4)))
+        if k in ATTACKER_IDS:
+            art.level_pips(s, u.pos, lit + 16, lvl, (120, 255, 160))
+            prog = self.upgrade_progress.get(k, 0)
+            art.arc_progress(s, u.pos, lit + 26, prog / UPGRADE_HOLD_S, (120, 255, 160))
+            chest = self._chest()
+            if chest is not None and np.linalg.norm(chest.pos - u.pos) < c * 1.8 and lvl < MAX_LEVEL \
+                    and k not in self.upgrade_locked:
+                cost = upgrade_cost(lvl)
+                col = (120, 255, 160) if self.chest_coins >= cost else (255, 110, 90)
+                t = self.small.render(f"upgrade {cost}", True, col)
+                s.blit(t, t.get_rect(midtop=(u.pos[0], u.pos[1] + lit + 30)))
+
+    def _draw_hud(self, s, now):
+        lvl = int(self.difficulty(now if self.game_over_at is None else self.game_over_at))
+        text = f"snacks {self.snacks}    chest {self.chest_coins}    mice level {lvl}    caught {self.score}"
+        t = self.font.render(text, True, (220, 220, 200))
+        s.blit(t, t.get_rect(center=self.hud_pos))
+        if self.game_over_at is not None:
+            mid = (self.origin + np.array([self.cols, self.rows]) * self.cell / 2)
+            t = self.big.render("The mice got the snacks!", True, (255, 90, 90))
+            pygame.draw.rect(s, (0, 0, 0), t.get_rect(center=mid).inflate(40, 30))
+            s.blit(t, t.get_rect(center=mid))
+            left = RESTART_AFTER_S - (now - self.game_over_at)
+            t = self.font.render(f"caught {self.score} mice - new game in {left:.0f}", True, (220, 220, 200))
+            s.blit(t, t.get_rect(center=(mid[0], mid[1] + self.cell * 1.1)))
+
+    # --- loop --------------------------------------------------------------
     def snapshot(self, path):
         """Save what the camera currently sees (handy when debugging over ssh)."""
         frame, _, _ = self.tracker.camera.latest()
         if frame is not None:
-            import cv2
             cv2.imwrite(path, frame)
 
     def run(self, duration=math.inf, snapshot_path=None, snapshot_every=5.0):
         t_prev = t_start = last_snap = time.monotonic()
-        while self.proj.pump() and self.lives > 0 and time.monotonic() - t_start < duration:
+        while self.proj.pump() and time.monotonic() - t_start < duration:
             now = time.monotonic()
             self.update(min(now - t_prev, 0.1), now)
             t_prev = now
-            self.draw()
+            self.draw(now)
             self.proj.flip()
             self.proj.clock.tick(60)
             if snapshot_path and now - last_snap > snapshot_every:
