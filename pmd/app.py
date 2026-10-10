@@ -13,6 +13,7 @@ from .scenes.labyrinth import Labyrinth
 from .scenes.menu import Menu
 from .scenes.pins import PinShooter
 from .scenes.pong import Pong
+from .scenes.slides import Slides
 from .scenes.snack import SnackCastle
 from .scenes.sneak import Sneak
 from .scenes.water import Water
@@ -80,7 +81,12 @@ class App:
     def switch(self, name):
         self.fx.clear()
         self.sound.play("start" if name != "menu" else "click")
-        self.scene = Menu(self) if name == "menu" else self.games[name](self)
+        if name == "menu":
+            self.scene = Menu(self)
+        elif name == "slides":
+            self.scene = Slides(self)
+        else:
+            self.scene = self.games[name](self)
 
     def _presses(self):
         """Wand ids whose button went from released to pressed since the last frame."""

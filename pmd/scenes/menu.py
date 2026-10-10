@@ -28,6 +28,13 @@ class Menu:
         self.tiles = [pygame.Rect(int(x0 + (i % cols) * (tw + gap)), int(y0 + (i // cols) * (th + gap)), int(tw), int(th))
                       for i in range(n)]
         self.small = pygame.font.SysFont(None, int(f.height * 0.045))
+        # "slides" button in a corner (the reader's bottom-left)
+        bw, bh = int(f.width * 0.11), int(f.height * 0.08)
+        self.slides_btn = pygame.Rect(0, 0, bw, bh)
+        if app.facing == "top":
+            self.slides_btn.topright = (f.right, f.top)
+        else:
+            self.slides_btn.bottomleft = (f.left, f.bottom)
         # each title in the largest font that fits inside its tile
         self.title_fonts = {}
         for name, tile in zip(self.choices, self.tiles):
@@ -47,6 +54,9 @@ class Menu:
             self.app.fx.burst(tags[k].pos, COLORS[pair], n=16, speed=250, life=0.4)
         self.clicks = [c for c in self.clicks if now - c[2] < 0.6]
         for k in presses:
+            if self.slides_btn.collidepoint(tags[k].pos):
+                self.app.switch("slides")
+                return
             for name, tile in zip(self.choices, self.tiles):
                 if tile.collidepoint(tags[k].pos):
                     self.app.switch(name)
@@ -59,6 +69,10 @@ class Menu:
         wands = [tags[k] for k in WAND_IDS if k in tags]
         ui.text(s, self.small, "hold a wand over a game and cover its blue spot", f.center + self.up * f.height * 0.45,
                 (170, 170, 170), self.facing)
+        hover = any(self.slides_btn.collidepoint(w.pos) for w in wands)
+        pygame.draw.rect(s, (60, 60, 60), self.slides_btn, border_radius=10)
+        pygame.draw.rect(s, (255, 220, 120) if hover else (140, 140, 140), self.slides_btn, 4 if hover else 2, border_radius=10)
+        ui.text(s, self.small, "slides", self.slides_btn.center, (255, 220, 120) if hover else (200, 200, 200), self.facing)
         for name, tile in zip(self.choices, self.tiles):
             hover = any(tile.collidepoint(w.pos) for w in wands)
             pygame.draw.rect(s, (60, 60, 60), tile, border_radius=16)

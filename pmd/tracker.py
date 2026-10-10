@@ -139,6 +139,7 @@ class Tracker:
         self.age_ms = {"roi": 0.0, "full": 0.0}
         self._tags = {}
         self.log = None  # set to a list to record every tracker update as (receive time, tags)
+        self.frame_jpeg = None  # latest camera frame asked for with request_frame()
         ctx = mp.get_context("spawn")
         self._conn, child = ctx.Pipe()
         self._proc = ctx.Process(target=_child_main, args=(child, calib_path, exposure, core_args), daemon=True)
@@ -150,7 +151,9 @@ class Tracker:
     def _drain(self):
         while self._conn.poll():
             kind, data = self._conn.recv()
-            if kind == "tags":
+            if kind == "frame":
+                self.frame_jpeg = data
+            elif kind == "tags":
                 self._tags, self.fps, self.age_ms = data
                 if self.log is not None:
                     self.log.append((time.monotonic(), self._tags))
@@ -175,6 +178,10 @@ class Tracker:
     def snapshot(self, path, annotate=False):
         """Ask the tracking process to save the current camera frame."""
         self._conn.send(("snapshot", (path, annotate)))
+
+    def request_frame(self, width=960):
+        """Ask for a small JPEG of the current camera view (arrives in self.frame_jpeg)."""
+        self._conn.send(("frame", width))
 
     def record(self, directory):
         """Save every raw camera frame to directory (None stops). For building datasets."""
@@ -223,6 +230,11 @@ def _child_main(conn, calib_path, exposure, core_args):
                     return
                 if kind == "snapshot":
                     core.snapshot(*arg)
+                elif kind == "frame":
+                    color = cam.latest_color()
+                    if color is not None:
+                        small = cv2.resize(color, (arg, arg * color.shape[0] // color.shape[1]))
+                        conn.send(("frame", cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()))
                 elif kind == "record":
                     cam.stop_recording()
                     if arg:

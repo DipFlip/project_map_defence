@@ -82,6 +82,12 @@ liquid flows towards the players. Every other tag is a tilting plank and each wa
 whole stick is a platform. Fill the containers with the colour they show (wrong
 liquid fizzles away); full ones vanish and new ones appear.
 
+## Slides
+The menu's "slides" corner button starts a short talk on the table: the title slide,
+the live camera view with what the tracker sees, the calibration capture, a game frame
+next to the pre-skewed frame actually sent to the projector, and the closing slide
+(`slides/*.png`). Any wand press moves on; after the last slide it's back to the menu.
+
 ## Sound and effects
 `pmd/sound.py` synthesises all effects at start-up; `pmd/particles.py` draws bursts,
 rings and confetti over every scene. Sound plays through the projector's speaker over

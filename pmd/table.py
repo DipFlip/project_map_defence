@@ -143,8 +143,12 @@ class TableView:
 
     def render(self, screen):
         """Warp the canvas onto the projector surface (zero-copy, ~4 ms at 1080p)."""
+        self.warp(self.canvas, screen)
+
+    def warp(self, canvas, screen):
+        """Warp a canvas-sized surface into a projector-sized one: what is sent over HDMI."""
         cw, ch = self.size
-        src = np.frombuffer(self.canvas.get_view("1"), np.uint8).reshape(ch, self.canvas.get_pitch() // 4, 4)
+        src = np.frombuffer(canvas.get_view("1"), np.uint8).reshape(ch, canvas.get_pitch() // 4, 4)
         W, H = self.proj_size
         dst = np.frombuffer(screen.get_view("1"), np.uint8).reshape(H, screen.get_pitch() // 4, 4)
         cv2.warpPerspective(src[:, :cw], self.canvas_to_proj, (W, H), dst=dst[:, :W],
