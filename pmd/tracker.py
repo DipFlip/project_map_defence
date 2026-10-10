@@ -38,6 +38,7 @@ class TrackedTag:
     last_seen: float  # capture time (time.monotonic) of the frame it was last seen in
     vel: np.ndarray = None  # projector px / s (filtered)
     cam_vel: np.ndarray = None  # camera px / s
+    raw_pos: np.ndarray = None  # unfiltered projector px of the last detection
 
     @property
     def raw_cam_center(self):
@@ -46,6 +47,23 @@ class TrackedTag:
     @property
     def forward(self):
         return np.array([np.cos(self.angle), np.sin(self.angle)])
+
+
+def extrapolation(vel, age, predict, size, deadband=(40, 120), max_horizon=0.3):
+    """Offset to add to a filtered position: velocity times (frame age + predict).
+
+    Below deadband[0] px/s nothing is added (so jitter on still tags isn't
+    amplified), ramping to full strength at deadband[1]. Capped at 2 tag sizes.
+    """
+    speed = float(np.linalg.norm(vel))
+    gain = np.clip((speed - deadband[0]) / (deadband[1] - deadband[0]), 0, 1)
+    if gain <= 0:
+        return np.zeros(2)
+    delta = vel * gain * min(age + predict, max_horizon)
+    n = np.linalg.norm(delta)
+    if n > 2 * size:
+        delta *= 2 * size / n
+    return delta
 
 
 class Tracker:
@@ -62,6 +80,7 @@ class Tracker:
         self.fps = 0.0
         self.age_ms = {"roi": 0.0, "full": 0.0}
         self._tags = {}
+        self.log = None  # set to a list to record every tracker update as (receive time, tags)
         ctx = mp.get_context("spawn")
         self._conn, child = ctx.Pipe()
         self._proc = ctx.Process(target=_child_main, args=(child, calib_path, exposure, core_args), daemon=True)
@@ -75,6 +94,8 @@ class Tracker:
             kind, data = self._conn.recv()
             if kind == "tags":
                 self._tags, self.fps, self.age_ms = data
+                if self.log is not None:
+                    self.log.append((time.monotonic(), self._tags))
 
     def tags(self, predict=True):
         """Dict id -> TrackedTag of present tags, positions extrapolated to now."""
@@ -84,17 +105,8 @@ class Tracker:
         now = time.monotonic()
         out = {}
         for k, t in self._tags.items():
-            speed = float(np.linalg.norm(t.vel))
-            # deadband so detection jitter doesn't get amplified on still tags
-            gain = np.clip((speed - 40) / 80, 0, 1)
-            if gain > 0:
-                horizon = min(now - t.last_seen + self.predict, 0.3)
-                delta = t.vel * gain * horizon
-                n = np.linalg.norm(delta)
-                if n > 2 * t.size:
-                    delta *= 2 * t.size / n
-                t = replace(t, pos=t.pos + delta, corners=t.corners + delta)
-            out[k] = t
+            delta = extrapolation(t.vel, now - t.last_seen, self.predict, t.size)
+            out[k] = replace(t, pos=t.pos + delta, corners=t.corners + delta)
         return out
 
     def px_per_mm(self, default=1.6):
@@ -217,7 +229,7 @@ class _Core:
         self.camera, self.calib = camera, calib
         self.hold, self.full_scan_every = hold, full_scan_every
         # One Euro settings; position in projector px, angle in radians
-        self.pos_filter = pos_filter or dict(min_cutoff=1.0, beta=0.04, d_cutoff=2.0)
+        self.pos_filter = pos_filter or dict(min_cutoff=1.0, beta=0.08, d_cutoff=4.0)  # tools/tune_prediction.py
         self.angle_filter = angle_filter or dict(min_cutoff=1.0, beta=0.5, d_cutoff=2.0)
         self._filters = {}
         self.fps = 0.0  # frames processed per second
@@ -370,7 +382,7 @@ class _Core:
                 angle = float(f_angle(angle, dt))
                 vel = f_pos.dx.copy()
                 corners = corners + (pos - raw_pos)
-                self._tags[tag.id] = TrackedTag(tag.id, pos, angle, size, corners, tag.corners, stamp, vel, cam_vel)
+                self._tags[tag.id] = TrackedTag(tag.id, pos, angle, size, corners, tag.corners, stamp, vel, cam_vel, raw_pos)
             for k in [k for k, t in self._tags.items() if now - t.last_seen > self.hold]:
                 del self._tags[k]
             self._version += 1

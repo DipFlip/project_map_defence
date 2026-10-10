@@ -13,9 +13,11 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pickle  # noqa: E402
+
 import numpy as np  # noqa: E402
 
-from pmd import CALIB_PATH  # noqa: E402
+from pmd import CALIB_PATH, DATA_DIR  # noqa: E402
 from pmd.calibration import Calibration  # noqa: E402
 from pmd.projector import Projector, pygame  # noqa: E402
 from pmd.system import performance_governor  # noqa: E402
@@ -32,6 +34,15 @@ def main(seconds):
     font = pygame.font.SysFont(None, 48)
     time.sleep(2)
     px_per_mm = tracker.px_per_mm()
+    center = np.array(calib.table_poly).mean(axis=0)
+    t_go = time.monotonic() + 5
+    while time.monotonic() < t_go and proj.pump():  # countdown so the player is ready
+        proj.screen.fill((0, 0, 0))
+        msg = font.render(f"get ready... {t_go - time.monotonic():.0f}", True, (255, 200, 0))
+        proj.screen.blit(msg, msg.get_rect(center=center))
+        proj.flip()
+        proj.clock.tick(30)
+    tracker.log = []
     seen = {}  # id -> {last_seen: pos}
     t_end = time.monotonic() + seconds
     try:
@@ -51,6 +62,13 @@ def main(seconds):
     finally:
         tracker.close()
         proj.close()
+    # raw detections for tuning the filter/prediction offline (tools/tune_prediction.py)
+    raw = {}
+    for recv, tags in tracker.log:
+        for k, t in tags.items():
+            raw.setdefault(k, {}).setdefault(t.last_seen, (recv, *t.raw_pos))  # first time we knew it
+    with open(os.path.join(DATA_DIR, "sweep.pkl"), "wb") as f:
+        pickle.dump({"px_per_mm": px_per_mm, "tracks": {k: sorted((s, *v) for s, v in d.items()) for k, d in raw.items()}}, f)
 
     det = np.zeros(len(BINS) - 1)
     frames = np.zeros(len(BINS) - 1)
