@@ -92,37 +92,47 @@ def nominal_K(cam_size, focal=None):
     return np.array([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1]], np.float64)
 
 
-def fit(cam_pts, proj_pts, cam_size):
-    """Jointly fit radial distortion (k1, k2, k3) and the homography."""
-    cam_pts = np.asarray(cam_pts, np.float64)
-    proj_pts = np.asarray(proj_pts, np.float64)
+def fit(groups, cam_size, table=0):
+    """Jointly fit radial distortion (k1, k2, k3) and one homography per flat surface.
+
+    groups: [(camera points, projector points)] per surface (table, floor, ...).
+    The lens is the same for all of them, so every surface helps pin down its
+    distortion even when the table covers only part of the image. Returns the
+    table's homography, its rms error and the table points that were kept.
+    """
     K = nominal_K(cam_size)
+    groups = [(np.asarray(c, np.float64), np.asarray(q, np.float64)) for c, q in groups]
+    keep = [np.ones(len(c), bool) for c, _ in groups]
 
-    def residual(p, return_H=False):
+    def homs(p):
+        return [np.append(p[3 + 8 * i:11 + 8 * i], 1).reshape(3, 3) for i in range(len(groups))]
+
+    def errors(p):
         dist = np.array([p[0], p[1], 0, 0, p[2]])
-        und = cv2.undistortPoints(cam_pts.reshape(-1, 1, 2), K, dist, P=K).reshape(-1, 2)
-        H = np.append(p[3:], 1).reshape(3, 3)
-        q = np.hstack([und, np.ones((len(und), 1))]) @ H.T
-        r = (q[:, :2] / q[:, 2:] - proj_pts).ravel()
-        return r
+        out = []
+        for (c, q), H, k in zip(groups, homs(p), keep):
+            und = cv2.undistortPoints(c[k].reshape(-1, 1, 2), K, dist, P=K).reshape(-1, 2)
+            h = np.hstack([und, np.ones((len(und), 1))]) @ H.T
+            out.append(h[:, :2] / h[:, 2:] - q[k])
+        return out
 
-    # keep only the dominant plane (the table); projection spilling onto the
-    # floor or a wall gives points that disagree wildly with it
-    H0, inl = cv2.findHomography(cam_pts, proj_pts, cv2.RANSAC, 25)
-    inl = inl.ravel().astype(bool)
-    cam_pts, proj_pts = cam_pts[inl], proj_pts[inl]
-    H0 /= H0[2, 2]
-    p0 = np.concatenate([[0, 0, 0], H0.ravel()[:8]])
-    sol = least_squares(residual, p0, loss="soft_l1", f_scale=3.0, x_scale="jac")
-    # drop gross outliers (misdetected corners) and refit
-    err = np.linalg.norm(residual(sol.x).reshape(-1, 2), axis=1)
-    keep = err < max(5.0, 4 * np.median(err))
-    cam_pts, proj_pts = cam_pts[keep], proj_pts[keep]
+    def residual(p):
+        return np.concatenate([e.ravel() for e in errors(p)])
+
+    p0 = [0.0, 0.0, 0.0]
+    for c, q in groups:
+        H0, _ = cv2.findHomography(c, q, 0)
+        p0 += list((H0 / H0[2, 2]).ravel()[:8])
+    sol = least_squares(residual, np.array(p0), loss="soft_l1", f_scale=3.0, x_scale="jac")
+    # drop gross outliers (misdetected corners) per surface and refit
+    for i, e in enumerate(errors(sol.x)):
+        err = np.linalg.norm(e, axis=1)
+        idx = np.nonzero(keep[i])[0]
+        keep[i][idx[err >= max(5.0, 4 * np.median(err))]] = False
     sol = least_squares(residual, sol.x, x_scale="jac")
-    err = np.linalg.norm(residual(sol.x).reshape(-1, 2), axis=1)
+    err = np.linalg.norm(errors(sol.x)[table], axis=1)
     dist = np.array([sol.x[0], sol.x[1], 0, 0, sol.x[2]])
-    H = np.append(sol.x[3:], 1).reshape(3, 3)
-    return K, dist, H, float(np.sqrt(np.mean(err ** 2))), proj_pts
+    return K, dist, homs(sol.x)[table], float(np.sqrt(np.mean(err ** 2))), groups[table][1][keep[table]]
 
 
 # --- capture procedure ---------------------------------------------------
@@ -229,8 +239,16 @@ def run(cam, proj, log=print, debug_dir=None, marker_px=90, spacing=150):
     proj.fill((0, 0, 0))
 
     cam_size = (int(w.shape[1]), int(w.shape[0]))
-    K, dist, Hm, rms, used = fit(cam_pts, proj_pts, cam_size)
-    log(f"fit: {len(used)}/{len(cam_pts)} points, rms {rms:.2f} projector px, dist {np.round(dist[[0, 1, 4]], 4)}")
+    cam_pts, proj_pts, lit = np.array(cam_pts), np.array(proj_pts), np.clip(w - b, 0, 255)
+    groups, table = surfaces(cam_pts, proj_pts, lit, log)
+    K, dist, Hm, rms, used = fit(groups, cam_size, table)
+    # split again on lens-corrected points with a tight tolerance: a low table and the
+    # floor right next to it are nearly the same plane under the loose first split
+    und = cv2.undistortPoints(cam_pts.reshape(-1, 1, 2), K, dist, P=K).reshape(-1, 2)
+    groups, table = surfaces(cam_pts, proj_pts, lit, log, min_points=20, thr=8.0, fit_pts=und)
+    K, dist, Hm, rms, used = fit(groups, cam_size, table)
+    log(f"fit: {len(used)}/{len(groups[table][0])} table points, rms {rms:.2f} projector px, "
+        f"dist {np.round(dist[[0, 1, 4]], 4)}")
     calib = Calibration(cam_size, (W, H), K, dist, Hm, exposure, rms)
     outline = [(0, 0), (W, 0), (W, H), (0, H)]
     edge = np.concatenate([np.linspace(outline[i], outline[(i + 1) % 4], 50) for i in range(4)])
@@ -239,6 +257,39 @@ def run(cam, proj, log=print, debug_dir=None, marker_px=90, spacing=150):
     if debug_dir:
         cv2.imwrite(f"{debug_dir}/calib_lit.jpg", np.clip(w - b, 0, 255).astype(np.uint8))
     return calib
+
+
+def surfaces(cam_pts, proj_pts, lit, log=print, min_points=40, thr=25.0, fit_pts=None):
+    """Split marker points by flat surface; returns (groups, index of the table).
+
+    Each flat surface (table, floor, a wall) is a separate homography. The table
+    is taken to be the brightest under projector white (a light table over a
+    darker floor; light paper or cloth on the table helps).
+    """
+    fit_pts = cam_pts if fit_pts is None else fit_pts  # e.g. undistorted points for a tighter split
+    rest = np.arange(len(cam_pts))
+    planes = []
+    while len(rest) >= min_points:
+        _, inl = cv2.findHomography(fit_pts[rest], proj_pts[rest], cv2.RANSAC, thr)
+        if inl is None or inl.sum() < min_points:
+            break
+        inl = inl.ravel().astype(bool)
+        planes.append(rest[inl])
+        rest = rest[~inl]
+    if not planes:
+        return [(cam_pts, proj_pts)], 0
+    h, w = lit.shape[:2]
+
+    def brightness(idx):
+        xy = np.clip(cam_pts[idx].round().astype(int), 0, (w - 1, h - 1))
+        return float(np.median(lit[xy[:, 1], xy[:, 0]]))
+
+    scores = [brightness(p) for p in planes]
+    best = int(np.argmax(scores))
+    if len(planes) > 1:
+        log("surfaces: " + ", ".join(f"{len(p)} points, brightness {sc:.0f}" for p, sc in zip(planes, scores))
+            + f" -> the table is the brightest ({len(planes[best])} points)")
+    return [(cam_pts[p], proj_pts[p]) for p in planes], best
 
 
 def table_frame(cam, proj, calib, log=print, debug_dir=None):
@@ -254,7 +305,10 @@ def table_frame(cam, proj, calib, log=print, debug_dir=None):
     W, H = proj.size
     cam.manual_exposure(calib.exposure)
     gray = capture(cam, proj, np.full((H, W), 110, np.uint8), settle=0.5)
-    found = [t for t in TagDetector().detect(gray.astype(np.uint8)) if t.id in TAG_MM]
+    table = np.array(calib.table_poly, np.float32)
+    found = [t for t in TagDetector().detect(gray.astype(np.uint8)) if t.id in TAG_MM
+             and cv2.pointPolygonTest(table, tuple(float(v) for v in calib.cam_to_proj(t.corners.mean(axis=0))[0]),
+                                      True) > -40]  # only tags lying on the table (not the floor)
     tags = [(calib.cam_to_proj(t.corners), TAG_MM[t.id]) for t in found]
     log(f"table frame: {len(tags)} tags of known size: {sorted(t.id for t in found)}")
     px_per_mm = np.median([np.linalg.norm(c[1] - c[0]) / mm for c, mm in tags]) if tags else 1.7
@@ -266,9 +320,12 @@ def table_frame(cam, proj, calib, log=print, debug_dir=None):
     b = capture(cam, proj, np.zeros((H, W), np.uint8), settle=0.6, n=8)
     proj.fill((0, 0, 0))
     outline = lit_outline(np.clip(w - b, 0, 255), calib.cam_to_proj)
-    if outline is None:
-        log("table frame: no lit table area found, using the calibration markers' area")
-        outline = np.array(calib.table_poly)
+    markers = np.array(calib.table_poly, np.float32)
+    if outline is None or cv2.contourArea(np.float32(outline)) > 1.6 * cv2.contourArea(markers):
+        # no lit area, or the lit area spans more than the table (floor, walls): use the
+        # area covered by the table's calibration markers instead
+        log("table frame: using the calibration markers' area as the table outline")
+        outline = markers
     Ht, size = align_to_outline(Hm, outline)
     calib.table_H, calib.table_size_mm = Ht.tolist(), [round(size[0], 1), round(size[1], 1)]
     log(f"table frame: table {size[0]:.0f} x {size[1]:.0f} mm")
