@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web-pong",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8517", "-d", "web"],
+      "port": 8517
+    }
+  ]
+}

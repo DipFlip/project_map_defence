@@ -69,6 +69,13 @@ model is downloaded to `data/` on first run.
 Keys: Esc/q quit, r new match, v video brightness, d hand skeletons, f fullscreen.
 On macOS the terminal needs camera access (System Settings > Privacy & Security > Camera).
 
+### In the browser
+`web/` is the same game as a static page (JS port of `hand_pong.py`, MediaPipe Tasks
+Vision running in the page, nothing uploaded). Live at https://finger-gun-pong.vercel.app.
+
+    python3 -m http.server 8517 -d web             # local: http://localhost:8517
+    cd web && npx vercel deploy --prod             # redeploy
+
 ## Pin shooter
 Ten pins in a line at each end. Each wand holds one ball; press to fire it wherever
 the wand points (the tag's printed top). An empty wand catches an incoming ball, a loaded one
