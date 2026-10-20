@@ -51,6 +51,24 @@ at most 70% of the court width). The ball bounces off it like off a moving wall:
 into the ball to hit it harder, sweep sideways to send it at an angle, tilt to aim.
 Fast balls relax back to a calm cruising speed. First to 7.
 
+## Webcam Pong (laptop, no projector)
+The laptop screen is the table: the webcam view fills it (mirrored, so it works
+like a mirror) and the Pong court is drawn over the video, 1:1 with the camera
+image. Two players stand side by side in front of the laptop, each making a
+finger gun (index finger out, thumb up, other fingers curled). Your bouncer is
+the line between your thumb tip and index tip; the leftmost gun is the left
+player, the rightmost the right player. Same ball physics as table Pong
+(`pmd/scenes/hand_pong.py` subclasses it); the ball is served once both players
+are aiming. Hand tracking is MediaPipe's hand landmarker (`pmd/hands.py`); its
+model is downloaded to `data/` on first run.
+
+    uv venv -p 3.12 .venv-cam
+    uv pip install --python .venv-cam/bin/python -r requirements-webcam.txt
+    .venv-cam/bin/python webcam_pong.py            # --windowed, --camera N, --no-mirror
+
+Keys: Esc/q quit, r new match, v video brightness, d hand skeletons, f fullscreen.
+On macOS the terminal needs camera access (System Settings > Privacy & Security > Camera).
+
 ## Pin shooter
 Ten pins in a line at each end. Each wand holds one ball; press to fire it wherever
 the wand points (the tag's printed top). An empty wand catches an incoming ball, a loaded one

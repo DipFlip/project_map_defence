@@ -35,6 +35,7 @@ def _perp(v):
 
 class Pong:
     title = "Pong"
+    min_forward = MIN_FORWARD  # 0 lets a hit send the ball back towards your own goal
 
     def __init__(self, app):
         self.app, self.field, mm = app, app.field, app.px_per_mm
@@ -91,8 +92,8 @@ class Pong:
         tangent = rel - vn * normal
         v = self.vel - (1 + RESTITUTION) * vn * normal - GRIP * tangent
         fwd = np.array([p.dir, 0.0])
-        min_fwd = MIN_FORWARD * CRUISE_MM * self.mm
-        if np.dot(v, fwd) < min_fwd:  # never back into your own goal
+        min_fwd = self.min_forward * CRUISE_MM * self.mm
+        if self.min_forward and np.dot(v, fwd) < min_fwd:  # never back into your own goal
             v = v + (min_fwd - np.dot(v, fwd)) * fwd
         speed = np.linalg.norm(v)
         self.vel = v * np.clip(speed, MIN_MM * self.mm, MAX_MM * self.mm) / max(speed, 1e-6)

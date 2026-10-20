@@ -1,0 +1,4 @@
+# Laptop / webcam games (webcam_pong.py). Not needed on the Radxa.
+mediapipe>=0.10.20
+pygame>=2.5
+numpy
