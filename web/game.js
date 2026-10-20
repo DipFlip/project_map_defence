@@ -533,7 +533,8 @@ class HandPong {
 // and unmirrored], ms: detection time }.
 const TRACKER_OPTIONS = {
   runningMode: "VIDEO", numHands: NUM_HANDS,
-  minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+  // low presence/tracking thresholds keep a hand that's partly out of the camera's view
+  minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.3, minTrackingConfidence: 0.3,
 };
 
 class WorkerTracker {
@@ -616,6 +617,10 @@ class CamApp {
     const W = innerWidth, H = innerHeight, dpr = Math.min(devicePixelRatio || 1, 2);
     this.canvas.width = Math.round(W * dpr);
     this.canvas.height = Math.round(H * dpr);
+    // in px, not 100vw/100vh: on phones 100vh is taller than the visible page, which would
+    // stretch the court past the bottom of the screen and off the video positioned by fit()
+    this.canvas.style.width = `${W}px`;
+    this.canvas.style.height = `${H}px`;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.W = W;
     this.H = H;
@@ -740,6 +745,11 @@ async function start() {
     document.getElementById("start").remove();
     const app = new CamApp(video, document.getElementById("canvas"), tracker);
     addEventListener("keydown", (e) => app.key(e));
+    let lastTap = 0; // double-tap toggles the hand skeletons (phones have no d key)
+    addEventListener("pointerup", (e) => {
+      if (e.timeStamp - lastTap < 350) app.debug = !app.debug;
+      lastTap = e.timeStamp;
+    });
     let prev = performance.now() / 1000;
     const loop = () => {
       const now = performance.now() / 1000;
