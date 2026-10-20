@@ -2,7 +2,8 @@
 //
 // The webcam view fills the window (mirrored) and the court is drawn over it. Each player's
 // bouncer is the line between their thumb tip and index tip; the leftmost hand is the left
-// player, the rightmost the right player. Hand tracking is MediaPipe's hand landmarker,
+// player, the rightmost the right player. On a portrait screen (phones) the court turns 90
+// degrees: the goals are the top and bottom edges and the topmost hand is the top player. Hand tracking is MediaPipe's hand landmarker,
 // running in the page (WASM + WebGL), so nothing leaves the browser.
 import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1/vision_bundle.mjs";
 
@@ -137,11 +138,13 @@ class Particles {
       this._add(add(pos, mul(d, radius)), mul(d, speed), life, size, color, 1);
     }
   }
-  confetti(f, n = 150) {
+  // falls from the top of the screen; on a turned court the screen's top is the court's left
+  confetti(f, turned, n = 150) {
     const colors = [[255, 80, 80], [255, 210, 60], [80, 230, 120], [240, 120, 255], [255, 255, 255], [255, 150, 40]];
     for (let i = 0; i < n; i++) {
-      this._add([f.left + Math.random() * f.width, f.top + Math.random() * f.height * 0.2],
-        [(Math.random() - 0.5) * 200, 150 + Math.random() * 250], 1.5 + Math.random() * 1.5, 3 + Math.random() * 4,
+      const across = Math.random(), down = Math.random() * 0.2, drift = (Math.random() - 0.5) * 200, fall = 150 + Math.random() * 250;
+      const pos = turned ? [f.left + down * f.width, f.top + across * f.height] : [f.left + across * f.width, f.top + down * f.height];
+      this._add(pos, turned ? [fall, drift] : [drift, fall], 1.5 + Math.random() * 1.5, 3 + Math.random() * 4,
         colors[Math.floor(Math.random() * colors.length)], 0.3);
     }
   }
@@ -228,7 +231,7 @@ class HandPong {
     const frame = this.app.frame;
     if (!frame || frame.n === this.frameN) return;
     this.frameN = frame.n;
-    const tips = frame.hands.map((h) => [this.app.toScreen(h[THUMB_TIP]), this.app.toScreen(h[INDEX_TIP])]);
+    const tips = frame.hands.map((h) => [this.app.toCourt(h[THUMB_TIP]), this.app.toCourt(h[INDEX_TIP])]);
     const mx = (g) => (g[0][0] + g[1][0]) / 2;
     tips.sort((a, b) => mx(a) - mx(b));
     const bySide = {};
@@ -412,12 +415,16 @@ class HandPong {
         this.winner = winner;
         this.winnerAt = now;
         this.app.sound.play("win");
-        this.app.fx.confetti(f);
+        this.app.fx.confetti(f, this.app.turned);
       }
     }
   }
 
   text(c, size, msg, [x, y], color) {
+    c.save();
+    c.translate(x, y); // keep the text upright on screen when the court is turned
+    if (this.app.turned) c.rotate(-Math.PI / 2);
+    x = y = 0;
     c.font = `bold ${Math.round(size)}px system-ui, -apple-system, sans-serif`;
     c.textAlign = "center";
     c.textBaseline = "middle";
@@ -425,6 +432,7 @@ class HandPong {
     c.fillText(msg, x + 3, y + 3);
     c.fillStyle = rgb(color);
     c.fillText(msg, x, y);
+    c.restore();
   }
 
   draw(c, now) {
@@ -455,7 +463,7 @@ class HandPong {
       c.strokeStyle = "white";
       c.lineWidth = 2;
       for (const h of frame.hands) {
-        const pts = h.map((q) => this.app.toScreen(q));
+        const pts = h.map((q) => this.app.toCourt(q));
         c.beginPath();
         for (const [a, b] of BONES) {
           c.moveTo(...pts[a]);
@@ -542,9 +550,12 @@ class CamApp {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.W = W;
     this.H = H;
-    this.pxPerMm = W / VIRTUAL_TABLE_MM;
+    // the court's long axis is its x; on a portrait screen that runs down the screen
+    this.turned = H > W;
+    const CW = this.turned ? H : W, CH = this.turned ? W : H;
+    this.pxPerMm = CW / VIRTUAL_TABLE_MM;
     const m = 4;
-    this.field = { left: m, top: m, right: W - m, bottom: H - m, width: W - 2 * m, height: H - 2 * m, centerX: W / 2, centerY: H / 2 };
+    this.field = { left: m, top: m, right: CW - m, bottom: CH - m, width: CW - 2 * m, height: CH - 2 * m, centerX: CW / 2, centerY: CH / 2 };
     this.fx.clear();
     this.scene = new HandPong(this); // new size: new field
   }
@@ -561,6 +572,12 @@ class CamApp {
   // normalised, mirrored camera coordinates (0..1) -> screen px, the same mapping the video is drawn with
   toScreen(q) {
     return [q[0] * this.fw * this.scale + this.offset[0], q[1] * this.fh * this.scale + this.offset[1]];
+  }
+
+  // the same, in court coordinates (screen turned back by 90 degrees on a portrait screen)
+  toCourt(q) {
+    const s = this.toScreen(q);
+    return this.turned ? [s[1], this.W - s[0]] : s;
   }
 
   detect() {
@@ -591,8 +608,11 @@ class CamApp {
     }
     this.scene.update(dt, now);
     this.fx.update(dt);
+    c.save();
+    if (this.turned) c.transform(0, 1, -1, 0, this.W, 0); // court x down the screen, court y right to left
     this.scene.draw(c, now);
     this.fx.draw(c);
+    c.restore();
     this._hz.drawN++;
     if (now - this._hz.t > 1) {
       this.handHz = this._hz.n / (now - this._hz.t);
@@ -630,7 +650,7 @@ async function start() {
     go.textContent = "Starting camera…";
     const video = document.getElementById("video");
     video.srcObject = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false,
+      video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false,
     });
     await video.play();
     go.textContent = "Loading hand model…";
