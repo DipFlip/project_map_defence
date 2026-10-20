@@ -3,10 +3,13 @@
 // The webcam view fills the window (mirrored) and the court is drawn over it. Each player's
 // bouncer is the line between their thumb tip and index tip; the leftmost hand is the left
 // player, the rightmost the right player. On a portrait screen (phones) the court turns 90
-// degrees: the goals are the top and bottom edges and the topmost hand is the top player. Hand tracking is MediaPipe's hand landmarker,
-// running in the page (WASM + WebGL), so nothing leaves the browser.
-import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1/vision_bundle.mjs";
-
+// degrees: the goals are the top and bottom edges and the topmost hand is the top player.
+//
+// Hand tracking is MediaPipe's hand landmarker, running in the page (WASM + WebGL), so nothing
+// leaves the browser. It runs in a worker (tracker.js) so a slow detection never stalls the
+// ball; the camera image is shown as the <video> element itself, zoomed in a little so the
+// camera sees past the screen's edges and a hand at the edge is still tracked.
+const BUNDLE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1/vision_bundle.mjs"; // keep tracker.js in step
 const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1/wasm";
 const MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
@@ -30,6 +33,8 @@ const JUMP = 0.3; // a hand appearing this far (x screen width) from the last on
 // --- webcam_pong.py --------------------------------------------------------
 const VIRTUAL_TABLE_MM = 1100; // the screen's width stands for this much table
 const DIM_LEVELS = [0.35, 0.6, 1.0]; // video brightness under the game
+const ZOOMS = [1.25, 1.5, 1.0]; // how much the camera image is enlarged past filling the screen
+const NUM_HANDS = 2; // more makes MediaPipe keep searching for new hands every frame
 
 const THUMB_TIP = 4, INDEX_TIP = 8;
 const BONES = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12],
@@ -523,18 +528,82 @@ class HandPong {
   }
 }
 
+// --- hand tracking ----------------------------------------------------------------
+// Both trackers take a camera frame and resolve to { hands: [[x, y] x 21 per hand, normalised
+// and unmirrored], ms: detection time }.
+const TRACKER_OPTIONS = {
+  runningMode: "VIDEO", numHands: NUM_HANDS,
+  minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+};
+
+class WorkerTracker {
+  static create() {
+    const w = new Worker("tracker.js", { type: "module" });
+    return new Promise((resolve, reject) => {
+      w.onerror = (e) => reject(new Error(e.message || "worker failed to load"));
+      w.onmessage = (e) => (e.data.type === "ready" ? resolve(new WorkerTracker(w)) : reject(new Error(e.data.message)));
+      w.postMessage({ type: "init", wasm: WASM, model: MODEL, options: TRACKER_OPTIONS });
+    });
+  }
+  constructor(worker) {
+    this.where = "worker";
+    this.worker = worker;
+    this.pending = null;
+    worker.onerror = (e) => console.error("hand tracking worker:", e.message);
+    worker.onmessage = (e) => {
+      const done = this.pending;
+      this.pending = null;
+      done?.(e.data.type === "hands" ? e.data : { hands: [], ms: 0 });
+    };
+  }
+  async detect(video, t) {
+    const bitmap = await createImageBitmap(video);
+    return new Promise((resolve) => {
+      this.pending = resolve;
+      this.worker.postMessage({ type: "frame", bitmap, t }, [bitmap]);
+    });
+  }
+}
+
+// fallback for browsers where MediaPipe won't start in a worker: detection blocks drawing
+class PageTracker {
+  static async create() {
+    const { FilesetResolver, HandLandmarker } = await import(BUNDLE);
+    const vision = await FilesetResolver.forVisionTasks(WASM);
+    const opts = (delegate) => ({ ...TRACKER_OPTIONS, baseOptions: { modelAssetPath: MODEL, delegate } });
+    try {
+      return new PageTracker(await HandLandmarker.createFromOptions(vision, opts("GPU")));
+    } catch {
+      return new PageTracker(await HandLandmarker.createFromOptions(vision, opts("CPU")));
+    }
+  }
+  constructor(landmarker) {
+    this.where = "page";
+    this.landmarker = landmarker;
+  }
+  async detect(video, t) {
+    const t0 = performance.now();
+    const res = this.landmarker.detectForVideo(video, t);
+    return { hands: res.landmarks.map((lm) => lm.map((p) => [p.x, p.y])), ms: performance.now() - t0 };
+  }
+}
+
 // --- the page (webcam_pong.py's CamApp) -----------------------------------------
 class CamApp {
-  constructor(video, canvas, landmarker) {
-    Object.assign(this, { video, canvas, landmarker });
+  constructor(video, canvas, tracker) {
+    Object.assign(this, { video, canvas, tracker });
     this.ctx = canvas.getContext("2d");
     this.sound = new Sound();
     this.fx = new Particles();
     this.frame = null;
     this.frameCount = 0;
     this.lastVideoTime = -1;
+    this.busy = false; // a camera frame is with the tracker
+    this.detectMs = 0;
     this.debug = false;
     this.dim = 1;
+    this.zoom = 0;
+    this.videoBox = "";
     this.now = performance.now() / 1000;
     this.handHz = 0;
     this.drawFps = 0;
@@ -544,7 +613,7 @@ class CamApp {
   }
 
   resize() {
-    const W = innerWidth, H = innerHeight, dpr = devicePixelRatio || 1;
+    const W = innerWidth, H = innerHeight, dpr = Math.min(devicePixelRatio || 1, 2);
     this.canvas.width = Math.round(W * dpr);
     this.canvas.height = Math.round(H * dpr);
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -560,13 +629,22 @@ class CamApp {
     this.scene = new HandPong(this); // new size: new field
   }
 
-  // fit the camera image to cover the window (cropping the overflow), keeping its proportions
+  // fit the camera image to cover the window and then some (cropping the overflow), keeping its
+  // proportions, and lay the (mirrored) <video> element out to match
   fit() {
     const fw = this.video.videoWidth, fh = this.video.videoHeight;
-    this.scale = Math.max(this.W / fw, this.H / fh);
+    this.scale = Math.max(this.W / fw, this.H / fh) * ZOOMS[this.zoom];
     this.fw = fw;
     this.fh = fh;
     this.offset = [(this.W - fw * this.scale) / 2, (this.H - fh * this.scale) / 2];
+    const box = [this.offset[0], this.offset[1], fw * this.scale, fh * this.scale].map((x) => `${x.toFixed(1)}px`);
+    const key = box.join() + this.dim;
+    if (key !== this.videoBox) {
+      this.videoBox = key;
+      const st = this.video.style;
+      [st.left, st.top, st.width, st.height] = box;
+      st.filter = DIM_LEVELS[this.dim] < 1 ? `brightness(${DIM_LEVELS[this.dim]})` : "none";
+    }
   }
 
   // normalised, mirrored camera coordinates (0..1) -> screen px, the same mapping the video is drawn with
@@ -580,15 +658,20 @@ class CamApp {
     return this.turned ? [s[1], this.W - s[0]] : s;
   }
 
+  // hand a new camera frame to the tracker unless it's still busy with the last one
   detect() {
     const v = this.video;
-    if (v.readyState < 2 || v.currentTime === this.lastVideoTime) return;
+    if (this.busy || v.readyState < 2 || v.currentTime === this.lastVideoTime) return;
     this.lastVideoTime = v.currentTime;
     const t = performance.now();
-    const res = this.landmarker.detectForVideo(v, t);
-    const hands = res.landmarks.map((lm) => lm.map((p) => [1 - p.x, p.y])); // mirrored like the video
-    this.frame = { hands, t: t / 1000, n: ++this.frameCount };
-    this._hz.n++;
+    this.busy = true;
+    this.tracker.detect(v, t).then(({ hands, ms }) => {
+      this.busy = false;
+      this.detectMs = ms;
+      // mirrored like the video
+      this.frame = { hands: hands.map((lm) => lm.map((p) => [1 - p[0], p[1]])), t: t / 1000, n: ++this.frameCount };
+      this._hz.n++;
+    });
   }
 
   step(dt, now) {
@@ -596,16 +679,7 @@ class CamApp {
     const c = this.ctx;
     this.detect();
     this.fit();
-    c.fillStyle = "black";
-    c.fillRect(0, 0, this.W, this.H);
-    if (this.video.readyState >= 2) {
-      c.save();
-      c.translate(this.W, 0);
-      c.scale(-1, 1);
-      c.filter = DIM_LEVELS[this.dim] < 1 ? `brightness(${DIM_LEVELS[this.dim]})` : "none";
-      c.drawImage(this.video, this.W - this.offset[0] - this.fw * this.scale, this.offset[1], this.fw * this.scale, this.fh * this.scale);
-      c.restore();
-    }
+    c.clearRect(0, 0, this.W, this.H); // the camera image is the <video> under the canvas
     this.scene.update(dt, now);
     this.fx.update(dt);
     c.save();
@@ -623,7 +697,7 @@ class CamApp {
     c.textAlign = "left";
     c.textBaseline = "bottom";
     c.fillStyle = "rgba(200,200,200,0.8)";
-    c.fillText(`hands ${this.handHz.toFixed(0)} Hz   draw ${this.drawFps.toFixed(0)} fps`, 12, this.H - 8);
+    c.fillText(`hands ${this.handHz.toFixed(0)} Hz (${this.detectMs.toFixed(0)} ms ${this.tracker.where})   draw ${this.drawFps.toFixed(0)} fps`, 12, this.H - 8);
   }
 
   key(e) {
@@ -633,6 +707,8 @@ class CamApp {
       this.scene.newMatch(this.now);
     } else if (k === "v") {
       this.dim = (this.dim + 1) % DIM_LEVELS.length;
+    } else if (k === "z") {
+      this.zoom = (this.zoom + 1) % ZOOMS.length;
     } else if (k === "d") {
       this.debug = !this.debug;
     } else if (k === "f") {
@@ -654,19 +730,15 @@ async function start() {
     });
     await video.play();
     go.textContent = "Loading hand model…";
-    const vision = await FilesetResolver.forVisionTasks(WASM);
-    const opts = (delegate) => ({
-      baseOptions: { modelAssetPath: MODEL, delegate }, runningMode: "VIDEO", numHands: 4,
-      minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
-    });
-    let landmarker;
+    let tracker;
     try {
-      landmarker = await HandLandmarker.createFromOptions(vision, opts("GPU"));
-    } catch {
-      landmarker = await HandLandmarker.createFromOptions(vision, opts("CPU"));
+      tracker = await WorkerTracker.create();
+    } catch (e) {
+      console.warn("hand tracking worker failed, tracking on the main thread instead:", e);
+      tracker = await PageTracker.create();
     }
     document.getElementById("start").remove();
-    const app = new CamApp(video, document.getElementById("canvas"), landmarker);
+    const app = new CamApp(video, document.getElementById("canvas"), tracker);
     addEventListener("keydown", (e) => app.key(e));
     let prev = performance.now() / 1000;
     const loop = () => {

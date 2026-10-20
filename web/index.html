@@ -8,7 +8,7 @@
   html, body { margin: 0; height: 100%; background: #000; color: #eee; overflow: hidden;
                font-family: system-ui, -apple-system, sans-serif; }
   canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
-  video { display: none; }
+  video { position: fixed; left: 0; top: 0; width: 0; height: 0; transform: scaleX(-1); object-fit: fill; }
   #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
            justify-content: center; gap: 18px; text-align: center; padding: 16px; background: #111; }
   #start h1 { margin: 0; font-size: clamp(32px, 7vw, 72px); }
@@ -30,7 +30,7 @@
      top player the top edge, bottom player the bottom. First to 7.</p>
   <button id="go">Start camera</button>
   <div id="err"></div>
-  <p class="keys">Keys: r new match · v video brightness · d hand skeletons · f fullscreen</p>
+  <p class="keys">Keys: r new match · v video brightness · z camera zoom · d hand skeletons · f fullscreen</p>
 </div>
 <script type="module" src="game.js"></script>
 </body>
