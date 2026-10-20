@@ -74,7 +74,10 @@ On macOS the terminal needs camera access (System Settings > Privacy & Security 
 Vision running in the page, nothing uploaded). Live at https://finger-gun-pong.vercel.app.
 
     python3 -m http.server 8517 -d web             # local: http://localhost:8517
-    cd web && npx vercel deploy --prod             # redeploy
+    cd web && npx vercel deploy --prod             # redeploy from CLI
+
+Or import the GitHub repo on vercel.com with default settings: `vercel.json` at the repo
+root serves `web/` as a static site, no build step.
 
 ## Pin shooter
 Ten pins in a line at each end. Each wand holds one ball; press to fire it wherever
