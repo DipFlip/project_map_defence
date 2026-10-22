@@ -35,6 +35,9 @@ const VIRTUAL_TABLE_MM = 1100; // the screen's width stands for this much table
 const DIM_LEVELS = [0.35, 0.6, 1.0]; // video brightness under the game
 const ZOOMS = [1.25, 1.5, 1.0]; // how much the camera image is enlarged past filling the screen
 const NUM_HANDS = 2; // more makes MediaPipe keep searching for new hands every frame
+// frames go to the worker at most this long a side: MediaPipe shrinks them to ~200 px anyway,
+// and full camera frames (3.7 MB each, 30 a second) pile up in Safari's GPU memory
+const GRAB_LONG = 640;
 // experiment switches: ?fx=0 no particles, ?sound=0 no sound (see the stats report)
 const FLAGS = Object.fromEntries(new URLSearchParams(location.search));
 
@@ -571,7 +574,10 @@ class WorkerTracker {
   }
   async detect(video, t) {
     const t0 = performance.now();
-    const bitmap = await createImageBitmap(video);
+    const k = Math.min(1, GRAB_LONG / Math.max(video.videoWidth, video.videoHeight));
+    const w = Math.round(video.videoWidth * k), h = Math.round(video.videoHeight * k);
+    const bitmap = await createImageBitmap(video, { resizeWidth: w, resizeHeight: h, resizeQuality: "low" });
+    this.size = `${bitmap.width}x${bitmap.height}`; // full size where the resize option isn't supported
     const grabMs = performance.now() - t0;
     return new Promise((resolve) => {
       this.pending = (r) => resolve({ ...r, grabMs });
@@ -814,7 +820,7 @@ class CamApp {
     const v = this.video;
     const text = this.stats.report([
       `${navigator.userAgent}`,
-      `screen ${this.W}x${this.H} dpr ${devicePixelRatio}, camera ${v.videoWidth}x${v.videoHeight}, tracking ${this.tracker.where}, ` +
+      `screen ${this.W}x${this.H} dpr ${devicePixelRatio}, camera ${v.videoWidth}x${v.videoHeight}, tracking ${this.tracker.where} (frames ${this.tracker.size || "as captured"}), ` +
         `zoom ${ZOOMS[this.zoom]}, flags ${location.search || "none"}`,
     ]);
     const box = document.getElementById("report");
