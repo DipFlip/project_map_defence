@@ -35,6 +35,8 @@ const VIRTUAL_TABLE_MM = 1100; // the screen's width stands for this much table
 const DIM_LEVELS = [0.35, 0.6, 1.0]; // video brightness under the game
 const ZOOMS = [1.25, 1.5, 1.0]; // how much the camera image is enlarged past filling the screen
 const NUM_HANDS = 2; // more makes MediaPipe keep searching for new hands every frame
+// experiment switches: ?fx=0 no particles, ?sound=0 no sound (see the stats report)
+const FLAGS = Object.fromEntries(new URLSearchParams(location.search));
 
 const THUMB_TIP = 4, INDEX_TIP = 8;
 const BONES = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12],
@@ -95,6 +97,7 @@ class Sound {
     };
   }
   play(name, vol = 1) {
+    if (FLAGS.sound === "0") return;
     const ctx = this.ctx, t0 = ctx.currentTime;
     for (const [wave, freq, dur, v, slide, delay] of this.lib[name] || []) {
       const g = ctx.createGain(), t = t0 + delay;
@@ -132,7 +135,7 @@ class Sound {
 
 // --- particles (pmd/particles.py) --------------------------------------------
 class Particles {
-  constructor(max = 1500) {
+  constructor(max = FLAGS.fx === "0" ? 0 : 1500) {
     this.p = [];
     this.max = max;
   }
@@ -317,6 +320,7 @@ class HandPong {
       direction: Math.atan2(normal[1], normal[0]), colors: [p.color, [255, 255, 255]],
     });
     this.lastHit[i] = now;
+    this.app.stats.acc.hits++;
     const need = MIN_SIDEWAYS * CRUISE_MM * this.mm;
     if (Math.abs(this.vel[0]) < need) this.vel[0] = need * (Math.sign(this.vel[0]) || p.dir);
     this.separate(normal, paddleVel);
@@ -604,7 +608,8 @@ class PageTracker {
   }
 }
 
-// --- on-screen stats: the last second's numbers and the last minute as a graph ----------
+// --- on-screen stats: the last second's numbers and the last minute as a graph; tapping the
+// panel opens a report of the last five minutes, second by second, to copy and send ------
 class Stats {
   constructor(now) {
     this.start = this.t = now;
@@ -613,7 +618,7 @@ class Stats {
     this.history = [];
     this.camKnown = false; // camera frames are counted where requestVideoFrameCallback exists
   }
-  zero() { return { draw: 0, cam: 0, results: 0, both: 0, detect: 0, detectMax: 0, grab: 0 }; }
+  zero() { return { draw: 0, cam: 0, results: 0, both: 0, detect: 0, detectMax: 0, grab: 0, hits: 0 }; }
   result(ms, grabMs, nHands) {
     const a = this.acc;
     a.results++;
@@ -627,13 +632,19 @@ class Stats {
     if (now - this.t < 1) return;
     const s = now - this.t, a = this.acc, n = Math.max(a.results, 1);
     this.last = { draw: a.draw / s, cam: a.cam / s, hands: a.results / s, both: a.both / n, detect: a.detect / n,
-      detectMax: a.detectMax, grab: a.grab / n, ...extra };
+      detectMax: a.detectMax, grab: a.grab / n, hits: a.hits, t: now - this.start, ...extra };
     this.history.push(this.last);
-    if (this.history.length > 60) this.history.shift();
+    if (this.history.length > 300) this.history.shift();
     this.t = now;
     this.acc = this.zero();
   }
-  // panel with its top left corner at (x, top): 290 x 126 px
+  report(header) {
+    const r = (x) => Math.round(x);
+    const rows = this.history.map((h) => [r(h.t), r(h.cam), r(h.hands), r(h.both * 100), r(h.grab), r(h.detect), r(h.detectMax),
+      r(h.draw), h.particles, h.sounds, h.ball ? 1 : 0, h.hits].join(" "));
+    return [...header, "t cam hands both% grab detect max draw particles sounds ball hits", ...rows].join("\n");
+  }
+  // panel with its top left corner at (x, top): 290 x 141 px
   draw(c, now, where, x, top) {
     const l = this.last;
     if (!l) return;
@@ -642,6 +653,7 @@ class Stats {
       `hands ${l.hands.toFixed(0)} Hz, both found ${(l.both * 100).toFixed(0)}%`,
       `${where}: grab ${l.grab.toFixed(0)} + detect ${l.detect.toFixed(0)} ms (max ${l.detectMax.toFixed(0)})`,
       `particles ${l.particles}   sounds ${l.sounds}`,
+      "tap here for a report to send",
     ];
     const lh = 15, gw = 180, gh = 50, y0 = top + gh + 10; // graph above the text
     c.fillStyle = "rgba(0,0,0,0.55)";
@@ -649,13 +661,14 @@ class Stats {
     x += 4;
     // graph: camera fps (white) and hands Hz (green) on 0..60, detect ms (orange) on 0..120
     const series = [["cam", 60, "rgba(255,255,255,0.8)"], ["hands", 60, "rgb(70,220,120)"], ["detect", 120, "rgb(255,150,50)"]];
+    const recent = this.history.slice(-60);
     c.lineWidth = 1.5;
     for (const [k, top, col] of series) {
       if (k === "cam" && !this.camKnown) continue;
       c.strokeStyle = col;
       c.beginPath();
-      this.history.forEach((h, i) => {
-        const px = x + (gw * (i + 60 - this.history.length)) / 59, py = y0 - 4 - (gh * Math.min(h[k], top)) / top;
+      recent.forEach((h, i) => {
+        const px = x + (gw * (i + 60 - recent.length)) / 59, py = y0 - 4 - (gh * Math.min(h[k], top)) / top;
         i ? c.lineTo(px, py) : c.moveTo(px, py);
       });
       c.stroke();
@@ -735,12 +748,11 @@ class CamApp {
     this.fh = fh;
     this.offset = [(this.W - fw * this.scale) / 2, (this.H - fh * this.scale) / 2];
     const box = [this.offset[0], this.offset[1], fw * this.scale, fh * this.scale].map((x) => `${x.toFixed(1)}px`);
-    const key = box.join() + this.dim;
+    const key = box.join();
     if (key !== this.videoBox) {
       this.videoBox = key;
       const st = this.video.style;
       [st.left, st.top, st.width, st.height] = box;
-      st.filter = DIM_LEVELS[this.dim] < 1 ? `brightness(${DIM_LEVELS[this.dim]})` : "none";
     }
   }
 
@@ -776,6 +788,10 @@ class CamApp {
     this.detect();
     this.fit();
     c.clearRect(0, 0, this.W, this.H); // the camera image is the <video> under the canvas
+    if (DIM_LEVELS[this.dim] < 1) { // dim it here: a CSS filter on the (oversized) video is costly on phones
+      c.fillStyle = `rgba(0,0,0,${1 - DIM_LEVELS[this.dim]})`;
+      c.fillRect(0, 0, this.W, this.H);
+    }
     this.scene.update(dt, now);
     this.fx.update(dt);
     c.save();
@@ -783,9 +799,27 @@ class CamApp {
     this.scene.draw(c, now);
     this.fx.draw(c);
     c.restore();
-    this.stats.tick(now, { particles: this.fx.p.length, sounds: this.sound.live });
+    this.stats.tick(now, { particles: this.fx.p.length, sounds: this.sound.live, ball: !!this.scene.ball });
     // in the middle, by the centre line, out of the paddles' way
-    this.stats.draw(c, now, this.tracker.where, this.turned ? 8 : this.W / 2 - 145, this.turned ? this.H / 2 + 12 : this.H - 134);
+    this.statsBox = this.turned ? [8, this.H / 2 + 12] : [this.W / 2 - 145, this.H - 149];
+    this.stats.draw(c, now, this.tracker.where, ...this.statsBox);
+  }
+
+  inStats(x, y) {
+    const [bx, by] = this.statsBox || [-1e9, -1e9];
+    return x >= bx && x <= bx + 290 && y >= by && y <= by + 141;
+  }
+
+  showReport() {
+    const v = this.video;
+    const text = this.stats.report([
+      `${navigator.userAgent}`,
+      `screen ${this.W}x${this.H} dpr ${devicePixelRatio}, camera ${v.videoWidth}x${v.videoHeight}, tracking ${this.tracker.where}, ` +
+        `zoom ${ZOOMS[this.zoom]}, flags ${location.search || "none"}`,
+    ]);
+    const box = document.getElementById("report");
+    box.querySelector("textarea").value = text;
+    box.hidden = false;
   }
 
   key(e) {
@@ -841,8 +875,21 @@ async function start() {
     document.getElementById("start").remove();
     const app = new CamApp(video, document.getElementById("canvas"), tracker);
     addEventListener("keydown", (e) => app.key(e));
+    const report = document.getElementById("report");
+    report.querySelector(".close").onclick = () => (report.hidden = true);
+    report.querySelector(".copy").onclick = async (e) => {
+      const ta = report.querySelector("textarea");
+      try {
+        await navigator.clipboard.writeText(ta.value);
+        e.target.textContent = "Copied";
+      } catch {
+        ta.select(); // clipboard refused: leave it selected to copy by hand
+      }
+    };
     let lastTap = 0; // double-tap toggles the hand skeletons (phones have no d key)
     addEventListener("pointerup", (e) => {
+      if (!report.hidden) return;
+      if (app.inStats(e.clientX, e.clientY)) return app.showReport();
       if (e.timeStamp - lastTap < 350) app.debug = !app.debug;
       lastTap = e.timeStamp;
     });
