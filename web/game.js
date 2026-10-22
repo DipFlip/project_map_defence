@@ -16,8 +16,8 @@ const MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/h
 // --- pong.py ---------------------------------------------------------------
 const WIN_SCORE = 7;
 const BALL_MM = 14;
-const CRUISE_MM = 320; // mm/s the ball relaxes back to
-const MIN_MM = 200, MAX_MM = 1500; // ball speed limits
+const CRUISE_MM = 400; // mm/s the ball relaxes back to
+const MIN_MM = 250, MAX_MM = 1125; // ball speed limits
 const RELAX_S = 2.5; // time constant for a fast ball to slow back to cruising speed
 const RESTITUTION = 0.85; // how much of the push along the bouncer's normal comes back
 const GRIP = 0.35; // share of the bouncer's sideways motion (relative to the ball) passed to the ball
@@ -530,7 +530,8 @@ class HandPong {
 
 // --- hand tracking ----------------------------------------------------------------
 // Both trackers take a camera frame and resolve to { hands: [[x, y] x 21 per hand, normalised
-// and unmirrored], ms: detection time }.
+// and unmirrored], ms: detection time, grabMs: time to copy the frame for the worker }.
+// `where` says which one runs and on what (GPU or CPU) for the on-screen stats.
 const TRACKER_OPTIONS = {
   runningMode: "VIDEO", numHands: NUM_HANDS,
   // low presence/tracking thresholds keep a hand that's partly out of the camera's view
@@ -542,12 +543,13 @@ class WorkerTracker {
     const w = new Worker("tracker.js", { type: "module" });
     return new Promise((resolve, reject) => {
       w.onerror = (e) => reject(new Error(e.message || "worker failed to load"));
-      w.onmessage = (e) => (e.data.type === "ready" ? resolve(new WorkerTracker(w)) : reject(new Error(e.data.message)));
+      w.onmessage = (e) => (e.data.type === "ready" ? resolve(new WorkerTracker(w, e.data.delegate)) : reject(new Error(e.data.message)));
       w.postMessage({ type: "init", wasm: WASM, model: MODEL, options: TRACKER_OPTIONS });
     });
   }
-  constructor(worker) {
-    this.where = "worker";
+  constructor(worker, delegate) {
+    this.delegate = delegate;
+    this.where = `worker ${delegate}`;
     this.worker = worker;
     this.pending = null;
     worker.onerror = (e) => console.error("hand tracking worker:", e.message);
@@ -558,34 +560,41 @@ class WorkerTracker {
     };
   }
   async detect(video, t) {
+    const t0 = performance.now();
     const bitmap = await createImageBitmap(video);
+    const grabMs = performance.now() - t0;
     return new Promise((resolve) => {
-      this.pending = resolve;
+      this.pending = (r) => resolve({ ...r, grabMs });
       this.worker.postMessage({ type: "frame", bitmap, t }, [bitmap]);
     });
   }
+
+  close() { this.worker.terminate(); }
 }
 
-// fallback for browsers where MediaPipe won't start in a worker: detection blocks drawing
+// tracking on the page: each detection holds up drawing, so it's the fallback for browsers
+// where the worker can't use the GPU (MediaPipe on a phone's CPU can be as slow as ~5 Hz)
 class PageTracker {
-  static async create() {
+  static async create(delegates = ["GPU", "CPU"]) {
     const { FilesetResolver, HandLandmarker } = await import(BUNDLE);
     const vision = await FilesetResolver.forVisionTasks(WASM);
-    const opts = (delegate) => ({ ...TRACKER_OPTIONS, baseOptions: { modelAssetPath: MODEL, delegate } });
-    try {
-      return new PageTracker(await HandLandmarker.createFromOptions(vision, opts("GPU")));
-    } catch {
-      return new PageTracker(await HandLandmarker.createFromOptions(vision, opts("CPU")));
+    for (const delegate of delegates) {
+      try {
+        return new PageTracker(await HandLandmarker.createFromOptions(vision, { ...TRACKER_OPTIONS, baseOptions: { modelAssetPath: MODEL, delegate } }), delegate);
+      } catch (e) {
+        if (delegate === delegates.at(-1)) throw e;
+      }
     }
   }
-  constructor(landmarker) {
-    this.where = "page";
+  constructor(landmarker, delegate) {
+    this.delegate = delegate;
+    this.where = `page ${delegate}`;
     this.landmarker = landmarker;
   }
   async detect(video, t) {
     const t0 = performance.now();
     const res = this.landmarker.detectForVideo(video, t);
-    return { hands: res.landmarks.map((lm) => lm.map((p) => [p.x, p.y])), ms: performance.now() - t0 };
+    return { hands: res.landmarks.map((lm) => lm.map((p) => [p.x, p.y])), ms: performance.now() - t0, grabMs: 0 };
   }
 }
 
@@ -601,6 +610,7 @@ class CamApp {
     this.lastVideoTime = -1;
     this.busy = false; // a camera frame is with the tracker
     this.detectMs = 0;
+    this.grabMs = 0;
     this.debug = false;
     this.dim = 1;
     this.zoom = 0;
@@ -670,9 +680,10 @@ class CamApp {
     this.lastVideoTime = v.currentTime;
     const t = performance.now();
     this.busy = true;
-    this.tracker.detect(v, t).then(({ hands, ms }) => {
+    this.tracker.detect(v, t).then(({ hands, ms, grabMs }) => {
       this.busy = false;
       this.detectMs = ms;
+      this.grabMs = grabMs;
       // mirrored like the video
       this.frame = { hands: hands.map((lm) => lm.map((p) => [1 - p[0], p[1]])), t: t / 1000, n: ++this.frameCount };
       this._hz.n++;
@@ -702,7 +713,7 @@ class CamApp {
     c.textAlign = "left";
     c.textBaseline = "bottom";
     c.fillStyle = "rgba(200,200,200,0.8)";
-    c.fillText(`hands ${this.handHz.toFixed(0)} Hz (${this.detectMs.toFixed(0)} ms ${this.tracker.where})   draw ${this.drawFps.toFixed(0)} fps`, 12, this.H - 8);
+    c.fillText(`hands ${this.handHz.toFixed(0)} Hz (${this.tracker.where}: grab ${this.grabMs.toFixed(0)} + detect ${this.detectMs.toFixed(0)} ms)   draw ${this.drawFps.toFixed(0)} fps`, 12, this.H - 8);
   }
 
   key(e) {
@@ -735,13 +746,26 @@ async function start() {
     });
     await video.play();
     go.textContent = "Loading hand model…";
-    let tracker;
-    try {
-      tracker = await WorkerTracker.create();
-    } catch (e) {
-      console.warn("hand tracking worker failed, tracking on the main thread instead:", e);
-      tracker = await PageTracker.create();
+    // ?tracker=worker or ?tracker=page forces one, to compare them on a device
+    const force = new URLSearchParams(location.search).get("tracker");
+    let tracker = null;
+    if (force !== "page") {
+      try {
+        tracker = await WorkerTracker.create();
+      } catch (e) {
+        console.warn("hand tracking worker failed:", e);
+      }
     }
+    if (force !== "worker" && (!tracker || tracker.delegate === "CPU")) {
+      try { // the GPU on the page beats the CPU in the worker, even though it holds up drawing
+        const page = await PageTracker.create(tracker ? ["GPU"] : ["GPU", "CPU"]);
+        tracker?.close();
+        tracker = page;
+      } catch (e) {
+        if (!tracker) throw e;
+      }
+    }
+    if (!tracker) throw new Error("hand tracking failed to start");
     document.getElementById("start").remove();
     const app = new CamApp(video, document.getElementById("canvas"), tracker);
     addEventListener("keydown", (e) => app.key(e));

@@ -76,6 +76,10 @@ Vision running in the page, nothing uploaded). Live at https://finger-gun-pong.v
     python3 -m http.server 8517 -d web             # local: http://localhost:8517
     cd web && npx vercel deploy --prod             # redeploy from CLI
 
+Hand tracking runs in a worker when it gets the GPU there, otherwise on the page's GPU (blocks
+drawing briefly), CPU as a last resort; the bottom-left stats say which. `?tracker=worker` or
+`?tracker=page` forces one.
+
 Or import the GitHub repo on vercel.com with default settings: `vercel.json` at the repo
 root serves `web/` as a static site, no build step.
 

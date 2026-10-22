@@ -18,15 +18,17 @@ onmessage = async (e) => {
   if (m.type === "init") {
     try {
       const vision = await FilesetResolver.forVisionTasks(m.wasm);
+      let used;
       for (const delegate of ["GPU", "CPU"]) {
         try {
           landmarker = await HandLandmarker.createFromOptions(vision, { ...m.options, baseOptions: { modelAssetPath: m.model, delegate } });
+          used = delegate;
           break;
         } catch (err) {
           if (delegate === "CPU") throw err;
         }
       }
-      postMessage({ type: "ready" });
+      postMessage({ type: "ready", delegate: used });
     } catch (err) {
       postMessage({ type: "error", message: String(err && err.message || err) });
     }
