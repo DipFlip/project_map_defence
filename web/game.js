@@ -83,6 +83,7 @@ class Sound {
     this.out = this.ctx.createGain();
     this.out.gain.value = 0.8;
     this.out.connect(this.ctx.destination);
+    this.live = 0; // sounds playing (for the stats)
     const n = { C5: 523.3, E5: 659.3, G5: 784.0, C6: 1046.5 };
     this.lib = {
       hit: [["square", 520, 0.08, 0.35, 0.7, 0], ["noise", 0, 0.05, 0.2, 0, 0]],
@@ -120,6 +121,11 @@ class Sound {
       src.connect(g);
       src.start(t);
       src.stop(t + dur + 0.02);
+      this.live++;
+      src.onended = () => { // some browsers keep connected nodes alive, piling up over a game
+        g.disconnect();
+        this.live--;
+      };
     }
   }
 }
@@ -598,6 +604,78 @@ class PageTracker {
   }
 }
 
+// --- on-screen stats: the last second's numbers and the last minute as a graph ----------
+class Stats {
+  constructor(now) {
+    this.start = this.t = now;
+    this.acc = this.zero();
+    this.last = null;
+    this.history = [];
+    this.camKnown = false; // camera frames are counted where requestVideoFrameCallback exists
+  }
+  zero() { return { draw: 0, cam: 0, results: 0, both: 0, detect: 0, detectMax: 0, grab: 0 }; }
+  result(ms, grabMs, nHands) {
+    const a = this.acc;
+    a.results++;
+    if (nHands >= 2) a.both++;
+    a.detect += ms;
+    a.detectMax = Math.max(a.detectMax, ms);
+    a.grab += grabMs;
+  }
+  tick(now, extra) { // once per drawn frame
+    this.acc.draw++;
+    if (now - this.t < 1) return;
+    const s = now - this.t, a = this.acc, n = Math.max(a.results, 1);
+    this.last = { draw: a.draw / s, cam: a.cam / s, hands: a.results / s, both: a.both / n, detect: a.detect / n,
+      detectMax: a.detectMax, grab: a.grab / n, ...extra };
+    this.history.push(this.last);
+    if (this.history.length > 60) this.history.shift();
+    this.t = now;
+    this.acc = this.zero();
+  }
+  // panel with its top left corner at (x, top): 290 x 126 px
+  draw(c, now, where, x, top) {
+    const l = this.last;
+    if (!l) return;
+    const lines = [
+      `${(now - this.start).toFixed(0)} s   draw ${l.draw.toFixed(0)} fps   camera ${this.camKnown ? l.cam.toFixed(0) + " fps" : "?"}`,
+      `hands ${l.hands.toFixed(0)} Hz, both found ${(l.both * 100).toFixed(0)}%`,
+      `${where}: grab ${l.grab.toFixed(0)} + detect ${l.detect.toFixed(0)} ms (max ${l.detectMax.toFixed(0)})`,
+      `particles ${l.particles}   sounds ${l.sounds}`,
+    ];
+    const lh = 15, gw = 180, gh = 50, y0 = top + gh + 10; // graph above the text
+    c.fillStyle = "rgba(0,0,0,0.55)";
+    c.fillRect(x, top, 290, gh + 10 + lh * lines.length + 6);
+    x += 4;
+    // graph: camera fps (white) and hands Hz (green) on 0..60, detect ms (orange) on 0..120
+    const series = [["cam", 60, "rgba(255,255,255,0.8)"], ["hands", 60, "rgb(70,220,120)"], ["detect", 120, "rgb(255,150,50)"]];
+    c.lineWidth = 1.5;
+    for (const [k, top, col] of series) {
+      if (k === "cam" && !this.camKnown) continue;
+      c.strokeStyle = col;
+      c.beginPath();
+      this.history.forEach((h, i) => {
+        const px = x + (gw * (i + 60 - this.history.length)) / 59, py = y0 - 4 - (gh * Math.min(h[k], top)) / top;
+        i ? c.lineTo(px, py) : c.moveTo(px, py);
+      });
+      c.stroke();
+    }
+    c.font = "10px system-ui, sans-serif";
+    c.textAlign = "left";
+    c.textBaseline = "top";
+    c.fillStyle = "rgb(70,220,120)";
+    c.fillText("hands Hz", x + gw + 6, y0 - gh - 4);
+    c.fillStyle = "rgb(255,150,50)";
+    c.fillText("detect ms /2", x + gw + 6, y0 - gh + 10);
+    c.fillStyle = "white";
+    c.fillText("camera fps", x + gw + 6, y0 - gh + 24);
+    c.font = "12px system-ui, sans-serif";
+    c.textBaseline = "bottom";
+    c.fillStyle = "rgba(220,220,220,0.95)";
+    lines.forEach((t, i) => c.fillText(t, x, y0 + lh * (i + 1)));
+  }
+}
+
 // --- the page (webcam_pong.py's CamApp) -----------------------------------------
 class CamApp {
   constructor(video, canvas, tracker) {
@@ -609,16 +687,20 @@ class CamApp {
     this.frameCount = 0;
     this.lastVideoTime = -1;
     this.busy = false; // a camera frame is with the tracker
-    this.detectMs = 0;
-    this.grabMs = 0;
     this.debug = false;
     this.dim = 1;
     this.zoom = 0;
     this.videoBox = "";
     this.now = performance.now() / 1000;
-    this.handHz = 0;
-    this.drawFps = 0;
-    this._hz = { t: this.now, n: 0, drawN: 0 };
+    this.stats = new Stats(this.now);
+    if (video.requestVideoFrameCallback) {
+      this.stats.camKnown = true;
+      const count = () => {
+        this.stats.acc.cam++;
+        video.requestVideoFrameCallback(count);
+      };
+      video.requestVideoFrameCallback(count);
+    }
     this.resize();
     addEventListener("resize", () => this.resize());
   }
@@ -682,11 +764,9 @@ class CamApp {
     this.busy = true;
     this.tracker.detect(v, t).then(({ hands, ms, grabMs }) => {
       this.busy = false;
-      this.detectMs = ms;
-      this.grabMs = grabMs;
+      this.stats.result(ms, grabMs, hands.length);
       // mirrored like the video
       this.frame = { hands: hands.map((lm) => lm.map((p) => [1 - p[0], p[1]])), t: t / 1000, n: ++this.frameCount };
-      this._hz.n++;
     });
   }
 
@@ -703,17 +783,9 @@ class CamApp {
     this.scene.draw(c, now);
     this.fx.draw(c);
     c.restore();
-    this._hz.drawN++;
-    if (now - this._hz.t > 1) {
-      this.handHz = this._hz.n / (now - this._hz.t);
-      this.drawFps = this._hz.drawN / (now - this._hz.t);
-      this._hz = { t: now, n: 0, drawN: 0 };
-    }
-    c.font = "14px system-ui, sans-serif";
-    c.textAlign = "left";
-    c.textBaseline = "bottom";
-    c.fillStyle = "rgba(200,200,200,0.8)";
-    c.fillText(`hands ${this.handHz.toFixed(0)} Hz (${this.tracker.where}: grab ${this.grabMs.toFixed(0)} + detect ${this.detectMs.toFixed(0)} ms)   draw ${this.drawFps.toFixed(0)} fps`, 12, this.H - 8);
+    this.stats.tick(now, { particles: this.fx.p.length, sounds: this.sound.live });
+    // in the middle, by the centre line, out of the paddles' way
+    this.stats.draw(c, now, this.tracker.where, this.turned ? 8 : this.W / 2 - 145, this.turned ? this.H / 2 + 12 : this.H - 134);
   }
 
   key(e) {
