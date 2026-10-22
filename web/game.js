@@ -38,8 +38,10 @@ const NUM_HANDS = 2; // more makes MediaPipe keep searching for new hands every 
 // frames go to the worker at most this long a side: MediaPipe shrinks them to ~200 px anyway,
 // and full camera frames (3.7 MB each, 30 a second) pile up in Safari's GPU memory
 const GRAB_LONG = 640;
-// experiment switches: ?fx=0 no particles, ?sound=0 no sound (see the stats report)
+// experiment switches: ?fx=0 no particles, ?sound=0 no sound, ?delegate=cpu MediaPipe on the CPU
+// (see the stats report)
 const FLAGS = Object.fromEntries(new URLSearchParams(location.search));
+const DELEGATES = FLAGS.delegate === "cpu" ? ["CPU"] : ["GPU", "CPU"];
 
 const THUMB_TIP = 4, INDEX_TIP = 8;
 const BONES = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12],
@@ -557,7 +559,7 @@ class WorkerTracker {
     return new Promise((resolve, reject) => {
       w.onerror = (e) => reject(new Error(e.message || "worker failed to load"));
       w.onmessage = (e) => (e.data.type === "ready" ? resolve(new WorkerTracker(w, e.data.delegate)) : reject(new Error(e.data.message)));
-      w.postMessage({ type: "init", wasm: WASM, model: MODEL, options: TRACKER_OPTIONS });
+      w.postMessage({ type: "init", wasm: WASM, model: MODEL, options: TRACKER_OPTIONS, delegates: DELEGATES });
     });
   }
   constructor(worker, delegate) {
@@ -868,9 +870,9 @@ async function start() {
         console.warn("hand tracking worker failed:", e);
       }
     }
-    if (force !== "worker" && (!tracker || tracker.delegate === "CPU")) {
+    if (force !== "worker" && (!tracker || (tracker.delegate === "CPU" && FLAGS.delegate !== "cpu"))) {
       try { // the GPU on the page beats the CPU in the worker, even though it holds up drawing
-        const page = await PageTracker.create(tracker ? ["GPU"] : ["GPU", "CPU"]);
+        const page = await PageTracker.create(tracker ? ["GPU"] : DELEGATES);
         tracker?.close();
         tracker = page;
       } catch (e) {

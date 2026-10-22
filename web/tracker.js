@@ -19,7 +19,7 @@ onmessage = async (e) => {
     try {
       const vision = await FilesetResolver.forVisionTasks(m.wasm);
       let used;
-      for (const delegate of ["GPU", "CPU"]) {
+      for (const delegate of m.delegates) {
         try {
           landmarker = await HandLandmarker.createFromOptions(vision, { ...m.options, baseOptions: { modelAssetPath: m.model, delegate } });
           used = delegate;

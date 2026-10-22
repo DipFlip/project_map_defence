@@ -79,7 +79,8 @@ Vision running in the page, nothing uploaded). Live at https://finger-gun-pong.v
 Hand tracking runs in a worker when it gets the GPU there, otherwise on the page's GPU (blocks
 drawing briefly), CPU as a last resort; the bottom-left stats say which. `?tracker=worker` or
 `?tracker=page` forces one. Tap the stats panel for a second-by-second report of the last five
-minutes to copy; `?fx=0` and `?sound=0` turn off particles and sound to compare.
+minutes to copy; `?fx=0` and `?sound=0` turn off particles and sound to compare, `?delegate=cpu` runs
+MediaPipe on the CPU.
 
 Or import the GitHub repo on vercel.com with default settings: `vercel.json` at the repo
 root serves `web/` as a static site, no build step.
